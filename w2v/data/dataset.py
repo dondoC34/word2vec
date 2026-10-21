@@ -17,35 +17,8 @@ logger = logging.getLogger("Dataset")
 class BaseWord2VecDataset(Dataset, ABC):
     """
     Abstract base class for Word2Vec datasets.
-    Extends torch.utils.data.Dataset with Word2Vec-specific vocabulary properties.
-    Custom datasets can inherit from this or simply inherit from torch.utils.data.Dataset.
-    """
-
-    @property
-    @abstractmethod
-    def vocab_size(self) -> int:
-        """Total number of unique tokens in the vocabulary."""
-        pass
-
-    @abstractmethod
-    def __len__(self) -> int:
-        pass
-
-    @abstractmethod
-    def __getitem__(self, idx: int) -> Any:
-        pass
-
-
-class SkipGramDataset(BaseWord2VecDataset):
-    """
-    Skip-Gram dataset generating (center, context) pairs within a sliding context window.
-    Supports multi-document corpora (List[List[str]]), guaranteeing that the sliding context
-    window NEVER crosses document boundaries. The end of one text and the beginning of another
-    will never generate spurious cross-document training pairs.
-
-    Standard PyTorch dataset paradigm:
-    Optionally accepts `corpus_dir` and `download=True` to automatically fetch/synchronize
-    standard benchmark literary corpora on disk before ingestion.
+    Extends torch.utils.data.Dataset with unified corpus ingestion/download,
+    document boundary isolation, vocabulary construction, and unigram negative sampling distribution.
     """
 
     def __init__(
@@ -62,7 +35,7 @@ class SkipGramDataset(BaseWord2VecDataset):
         min_count: int = 1,
     ):
         """
-        Initialize the SkipGramDataset.
+        Initialize the common Word2Vec dataset components.
 
         Args:
             corpus_dir: Optional directory containing text files (*.txt) to ingest.
@@ -73,7 +46,7 @@ class SkipGramDataset(BaseWord2VecDataset):
             tokens: Alias for a single list of tokens (kept for backward compatibility).
             documents: Explicit list of document token lists.
             window_size: Half-window size for context words (e.g. 2 means 2 words left and 2 words right).
-            n_negative: Number of negative samples drawn per positive pair.
+            n_negative: Number of negative samples drawn per positive sample.
             min_count: Words appearing fewer than this threshold are discarded.
         """
         self.window_size = window_size
@@ -149,14 +122,17 @@ class SkipGramDataset(BaseWord2VecDataset):
         elif tokens is not None:
             docs = [tokens]
         else:
-            raise ValueError("Must provide either 'corpus_dir', 'corpus', 'documents', or 'tokens' to SkipGramDataset.")
+            raise ValueError(
+                f"Must provide either 'corpus_dir', 'corpus', 'documents', or 'tokens' to {self.__class__.__name__}."
+            )
 
         self.documents: list[list[str]] = docs
         self.tokens: list[str] = [tok for d in docs for tok in d]
         self.num_documents = len(docs)
         total_raw_tokens = len(self.tokens)
         logger.info(
-            "Initializing SkipGramDataset: %d document(s) with %d total raw tokens.",
+            "Initializing %s: %d document(s) with %d total raw tokens.",
+            self.__class__.__name__,
             self.num_documents,
             total_raw_tokens,
         )
@@ -191,19 +167,86 @@ class SkipGramDataset(BaseWord2VecDataset):
         self.neg_sampling_dist = unigram_dist / unigram_dist.sum()
         self.neg_dist_tensor = torch.tensor(self.neg_sampling_dist, dtype=torch.float32)
 
-        # Step 3: Generate center-context pairs per document
+    @property
+    def vocab_size(self) -> int:
+        """Total number of unique tokens in the vocabulary."""
+        return self._vocab_size
+
+    @abstractmethod
+    def __len__(self) -> int:
+        pass
+
+    @abstractmethod
+    def __getitem__(self, idx: int) -> Any:
+        pass
+
+
+class SkipGramDataset(BaseWord2VecDataset):
+    """
+    Skip-Gram dataset generating (center, context) pairs within a sliding context window.
+    Supports multi-document corpora (List[List[str]]), guaranteeing that the sliding context
+    window NEVER crosses document boundaries. The end of one text and the beginning of another
+    will never generate spurious cross-document training pairs.
+
+    Standard PyTorch dataset paradigm:
+    Optionally accepts `corpus_dir` and `download=True` to automatically fetch/synchronize
+    standard benchmark literary corpora on disk before ingestion.
+    """
+
+    def __init__(
+        self,
+        corpus_dir: str | Path | None = None,
+        download: bool = False,
+        tokenizer: BaseTokenizer | None = None,
+        max_tokens: int | None = None,
+        corpus: list[str] | list[list[str]] | None = None,
+        tokens: list[str] | None = None,
+        documents: list[list[str]] | None = None,
+        window_size: int = 2,
+        n_negative: int = 5,
+        min_count: int = 1,
+    ):
+        """
+        Initialize the SkipGramDataset.
+
+        Args:
+            corpus_dir: Optional directory containing text files (*.txt) to ingest.
+            download: If True and corpus_dir is provided, ensures standard NLTK corpora are downloaded.
+            tokenizer: Tokenizer instance (defaults to BasicTokenizer()).
+            max_tokens: Optional limit on total tokens across all documents.
+            corpus: A list of tokens (single document) or a list of token lists (multiple documents).
+            tokens: Alias for a single list of tokens (kept for backward compatibility).
+            documents: Explicit list of document token lists.
+            window_size: Half-window size for context words (e.g. 2 means 2 words left and 2 words right).
+            n_negative: Number of negative samples drawn per positive pair.
+            min_count: Words appearing fewer than this threshold are discarded.
+        """
+        super().__init__(
+            corpus_dir=corpus_dir,
+            download=download,
+            tokenizer=tokenizer,
+            max_tokens=max_tokens,
+            corpus=corpus,
+            tokens=tokens,
+            documents=documents,
+            window_size=window_size,
+            n_negative=n_negative,
+            min_count=min_count,
+        )
+
+        # Generate center-context pairs per document
         # CRITICAL: We iterate document by document so that the sliding window
         # is strictly bounded within each document. No pairs cross from doc N to doc N+1.
         self.pairs: list[tuple[int, int]] = []
-        for doc in docs:
+        for doc in self.documents:
             # Map tokens in the current document to their integer vocabulary IDs
             doc_ids = [self.stoi[t] for t in doc if t in self.stoi]
             doc_len = len(doc_ids)
 
             for center_i in range(doc_len):
                 center_word = doc_ids[center_i]
-                start = max(0, center_i - window_size)
-                end = min(doc_len, center_i + window_size + 1)
+                start = max(0, center_i - self.window_size)
+                end = min(doc_len, center_i + self.window_size + 1)
                 for ctx_i in range(start, end):
                     if ctx_i != center_i:
                         self.pairs.append((center_word, doc_ids[ctx_i]))
@@ -214,10 +257,6 @@ class SkipGramDataset(BaseWord2VecDataset):
             len(self.pairs),
             self.num_documents,
         )
-
-    @property
-    def vocab_size(self) -> int:
-        return self._vocab_size
 
     def __len__(self) -> int:
         return len(self.pairs)
@@ -281,133 +320,30 @@ class BoWDataset(BaseWord2VecDataset):
             n_negative: Number of negative samples drawn per positive target word.
             min_count: Words appearing fewer than this threshold are discarded.
         """
-        self.window_size = window_size
-        self.n_negative = n_negative
-        self.min_count = min_count
-        self.corpus_files: list[str] = []
-
-        docs: list[list[str]] = []
-
-        # Case 1: Ingest from corpus_dir directly
-        if corpus_dir is not None:
-            corpus_path = Path(corpus_dir)
-            corpus_path.mkdir(parents=True, exist_ok=True)
-            if download:
-                ensure_nltk_gutenberg_corpora(corpus_path)
-
-            if not corpus_path.exists() or not corpus_path.is_dir():
-                logger.error("Corpus directory not found: '%s'", corpus_dir)
-                raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
-
-            txt_files = sorted(list(corpus_path.glob("*.txt")))
-            if not txt_files:
-                txt_files = [f for f in sorted(list(corpus_path.iterdir())) if f.is_file()]
-
-            if not txt_files:
-                logger.error("No text files found in corpus directory: '%s'", corpus_dir)
-                raise ValueError(f"No text files found in corpus directory: {corpus_dir}")
-
-            self.corpus_files = [str(f) for f in txt_files]
-            tok = tokenizer or BasicTokenizer()
-
-            logger.info(
-                "Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files)
-            )
-            for fpath in txt_files:
-                try:
-                    with open(fpath, encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
-                except Exception as e:
-                    logger.warning("Failed reading '%s': %s. Skipping document.", fpath.name, e)
-                    continue
-
-                file_tokens = tok.tokenize(content)
-                logger.info(
-                    "Parsed document '%s': %d tokens (%d characters).", fpath.name, len(file_tokens), len(content)
-                )
-                docs.append(file_tokens)
-
-            # Apply token budget cap if requested
-            if max_tokens is not None:
-                total_tok = sum(len(d) for d in docs)
-                if total_tok > max_tokens:
-                    logger.info("Applying max_tokens=%d cap (from %d total tokens).", max_tokens, total_tok)
-                    truncated_docs = []
-                    accumulated = 0
-                    for d in docs:
-                        if accumulated + len(d) <= max_tokens:
-                            truncated_docs.append(d)
-                            accumulated += len(d)
-                        else:
-                            remaining = max_tokens - accumulated
-                            if remaining > 0:
-                                truncated_docs.append(d[:remaining])
-                            break
-                    docs = truncated_docs
-
-        # Case 2: Ingest from explicit token lists / documents
-        elif documents is not None:
-            docs = documents
-        elif corpus is not None:
-            if len(corpus) > 0 and isinstance(corpus[0], list):
-                docs = corpus  # type: ignore[assignment]
-            else:
-                docs = [corpus]  # type: ignore[list-item]
-        elif tokens is not None:
-            docs = [tokens]
-        else:
-            raise ValueError("Must provide either 'corpus_dir', 'corpus', 'documents', or 'tokens' to BoWDataset.")
-
-        self.documents: list[list[str]] = docs
-        self.tokens: list[str] = [tok for d in docs for tok in d]
-        self.num_documents = len(docs)
-        total_raw_tokens = len(self.tokens)
-        logger.info(
-            "Initializing BoWDataset: %d document(s) with %d total raw tokens.",
-            self.num_documents,
-            total_raw_tokens,
+        super().__init__(
+            corpus_dir=corpus_dir,
+            download=download,
+            tokenizer=tokenizer,
+            max_tokens=max_tokens,
+            corpus=corpus,
+            tokens=tokens,
+            documents=documents,
+            window_size=window_size,
+            n_negative=n_negative,
+            min_count=min_count,
         )
 
-        # Step 1: Compute vocabulary frequencies
-        raw_counts: Counter = Counter()
-        for doc in docs:
-            raw_counts.update(doc)
-
-        filtered_words = [w for w, count in raw_counts.items() if count >= min_count]
-        filtered_counts = {w: raw_counts[w] for w in filtered_words}
-
-        self.itos: list[str] = list(filtered_counts.keys())
-        self.stoi: dict[str, int] = {w: i for i, w in enumerate(self.itos)}
-        self._vocab_size: int = len(self.itos)
-
-        if self._vocab_size == 0:
-            logger.error("Vocabulary is empty after applying min_count=%d threshold.", min_count)
-            raise ValueError(f"Vocabulary is empty after applying min_count={min_count} filter.")
-
-        logger.info(
-            "Vocabulary built for BoW: %d unique words retained (min_count=%d, discarded %d rare words).",
-            self._vocab_size,
-            min_count,
-            len(raw_counts) - self._vocab_size,
-        )
-
-        # Step 2: Unigram distribution raised to 0.75 for negative sampling
-        freqs = np.array([filtered_counts[w] for w in self.itos], dtype=np.float64)
-        unigram_dist = freqs**0.75
-        self.neg_sampling_dist = unigram_dist / unigram_dist.sum()
-        self.neg_dist_tensor = torch.tensor(self.neg_sampling_dist, dtype=torch.float32)
-
-        # Step 3: Generate (context_tokens, center_target) samples per document
+        # Generate (context_tokens, center_target) samples per document
         # Strict boundary protection: context never crosses document boundaries
         self.samples: list[tuple[list[int], int]] = []
-        for doc in docs:
+        for doc in self.documents:
             doc_ids = [self.stoi[t] for t in doc if t in self.stoi]
             doc_len = len(doc_ids)
 
             for center_i in range(doc_len):
                 center_word = doc_ids[center_i]
-                start = max(0, center_i - window_size)
-                end = min(doc_len, center_i + window_size + 1)
+                start = max(0, center_i - self.window_size)
+                end = min(doc_len, center_i + self.window_size + 1)
                 context = [doc_ids[ctx_i] for ctx_i in range(start, end) if ctx_i != center_i]
                 if context:
                     self.samples.append((context, center_word))
@@ -418,10 +354,6 @@ class BoWDataset(BaseWord2VecDataset):
             len(self.samples),
             self.num_documents,
         )
-
-    @property
-    def vocab_size(self) -> int:
-        return self._vocab_size
 
     def __len__(self) -> int:
         return len(self.samples)

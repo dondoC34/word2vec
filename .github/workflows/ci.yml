@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  statuses: write
+  pull-requests: write
+
 jobs:
   lint-and-typecheck:
     name: Lint & Typecheck (Ruff + Mypy)
@@ -32,13 +37,91 @@ jobs:
         run: uv sync --dev
 
       - name: Run Ruff Lint check
-        run: uv run ruff check w2v
+        run: uv run ruff check w2v tests
 
       - name: Run Ruff Format check
-        run: uv run ruff format --check w2v
+        run: uv run ruff format --check w2v tests
 
       - name: Run Mypy Typecheck
-        run: uv run mypy w2v
+        run: uv run mypy w2v tests
 
       - name: Smoke test w2v CLI
         run: uv run w2v --help
+
+  tests:
+    name: Tests & Coverage (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run Pytest with Coverage
+        run: |
+          uv run pytest -v --cov=w2v --cov-report=term --cov-report=json:coverage.json
+
+      - name: Publish Coverage Report & Commit Status
+        if: always() && hashFiles('coverage.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          uv run python - << 'EOF'
+          import json
+          import os
+          import subprocess
+
+          with open("coverage.json", encoding="utf-8") as f:
+              cov_data = json.load(f)
+
+          total_cov = cov_data.get("totals", {}).get("percent_covered_display", "0")
+          percent_num = float(cov_data.get("totals", {}).get("percent_covered", 0.0))
+
+          # Dynamic badge color based on threshold
+          color = "brightgreen" if percent_num >= 80 else "yellow" if percent_num >= 50 else "red"
+          badge_url = f"https://img.shields.io/badge/coverage-{total_cov}%25-{color}"
+
+          # 1. Render Markdown summary in GitHub Actions UI ($GITHUB_STEP_SUMMARY)
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_file:
+              with open(summary_file, "a", encoding="utf-8") as out:
+                  out.write(f"## Test Coverage Report ![{total_cov}%]({badge_url})\n\n")
+                  out.write(f"**Total Coverage:** `{total_cov}%`\n\n")
+                  out.write("| Module / File | Statements | Missing | Coverage |\n")
+                  out.write("| :--- | :--------- | :------ | :------- |\n")
+                  for filepath, fstats in sorted(cov_data.get("files", {}).items()):
+                      pct = fstats.get("summary", {}).get("percent_covered_display", "0")
+                      stmts = fstats.get("summary", {}).get("num_statements", 0)
+                      miss = fstats.get("summary", {}).get("missing_lines", 0)
+                      out.write(f"| `{filepath}` | {stmts} | {miss} | **{pct}%** |\n")
+
+          # 2. Attach Commit Status (visible directly in GitHub commit list and under commit message)
+          repo = os.environ.get("GITHUB_REPOSITORY")
+          sha = os.environ.get("COMMIT_SHA")
+          run_id = os.environ.get("GITHUB_RUN_ID")
+          run_url = f"https://github.com/{repo}/actions/runs/{run_id}" if repo and run_id else ""
+
+          if repo and sha and os.environ.get("GH_TOKEN"):
+              state = "success" if percent_num >= 50 else "failure"
+              desc = f"Coverage: {total_cov}%"
+              cmd = [
+                  "gh", "api", "--method", "POST", f"repos/{repo}/statuses/{sha}",
+                  "-f", f"state={state}",
+                  "-f", "context=coverage",
+                  "-f", f"description={desc}",
+                  "-f", f"target_url={run_url}"
+              ]
+              subprocess.run(cmd, check=False)
+          EOF

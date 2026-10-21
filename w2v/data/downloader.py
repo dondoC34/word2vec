@@ -20,7 +20,7 @@ def ensure_nltk_gutenberg_corpora(
     Args:
         target_dir: Destination directory where corpus files reside.
         target_corpora: Optional custom list of NLTK Gutenberg book identifiers.
-                        Defaults to a curated selection of 10 classic works.
+                        Defaults to a curated selection of 18 classic works.
 
     Returns:
         List of Path objects for newly downloaded delta files.
@@ -37,9 +37,17 @@ def ensure_nltk_gutenberg_corpora(
             "austen-sense.txt",
             "chesterton-thursday.txt",
             "chesterton-brown.txt",
+            "chesterton-ball.txt",
             "shakespeare-hamlet.txt",
             "shakespeare-macbeth.txt",
+            "shakespeare-caesar.txt",
             "milton-paradise.txt",
+            "blake-poems.txt",
+            "whitman-leaves.txt",
+            "bryant-stories.txt",
+            "burgess-busterbrown.txt",
+            "edgeworth-parents.txt",
+            "bible-kjv.txt",
         ]
 
     existing_files = {f.name.lower() for f in dest.iterdir() if f.is_file()}
