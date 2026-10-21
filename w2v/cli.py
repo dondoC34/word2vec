@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from w2v.word2vec import Word2Vec, setup_logging
+from w2v.bow import BoW
+from w2v.skipgram import SkipGram, setup_logging
 
 logger = logging.getLogger("CLI")
 
@@ -22,7 +23,7 @@ class W2VArgumentParser(argparse.ArgumentParser):
 
     def format_help(self) -> str:
         table_rows = [
-            ("--model", "skipgram", "Model architecture to use (skipgram)."),
+            ("--model", "skipgram", "Model architecture to use ('skipgram', 'bow', 'cbow')."),
             ("--embedding-dim", "128", "Dimensionality of dense embedding vectors."),
             ("--window-size", "2", "Context half-window size (tokens left and right)."),
             ("--n-negative", "5", "Number of negative samples per positive pair."),
@@ -77,8 +78,8 @@ def create_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default="skipgram",
-        choices=["skipgram"],
-        help="Model architecture to use (skipgram).",
+        choices=["skipgram", "bow", "cbow"],
+        help="Model architecture to use ('skipgram', 'bow', 'cbow').",
     )
     parser.add_argument(
         "--embedding-dim",
@@ -218,24 +219,40 @@ def main(args: Optional[List[str]] = None) -> int:
     logger.info("=" * 70)
 
     try:
-        # Initialize Word2Vec pipeline with parsed configuration
-        w2v = Word2Vec(
-            corpus_dir=parsed_args.corpus_dir,
-            embedding_dim=parsed_args.embedding_dim,
-            window_size=parsed_args.window_size,
-            n_negative=parsed_args.n_negative,
-            min_count=parsed_args.min_count,
-            tied_weights=parsed_args.tied_weights,
-            max_tokens=parsed_args.max_tokens,
-            sync_corpora_hook=parsed_args.sync_corpora,
-            device=parsed_args.device,
-            log_dir=parsed_args.log_dir,
-        )
+        # Instantiate requested architecture (Word2Vec / Skip-Gram or BoW / CBOW)
+        if parsed_args.model.lower() in ("bow", "cbow"):
+            logger.info("Initializing Continuous Bag-of-Words (BoW / CBOW) engine...")
+            model_pipeline = BoW(
+                corpus_dir=parsed_args.corpus_dir,
+                embedding_dim=parsed_args.embedding_dim,
+                window_size=parsed_args.window_size,
+                n_negative=parsed_args.n_negative,
+                min_count=parsed_args.min_count,
+                tied_weights=parsed_args.tied_weights,
+                max_tokens=parsed_args.max_tokens,
+                sync_corpora_hook=parsed_args.sync_corpora,
+                device=parsed_args.device,
+                log_dir=parsed_args.log_dir,
+            )
+        else:
+            logger.info("Initializing Skip-Gram with Negative Sampling (SGNS) engine...")
+            model_pipeline = SkipGram(
+                corpus_dir=parsed_args.corpus_dir,
+                embedding_dim=parsed_args.embedding_dim,
+                window_size=parsed_args.window_size,
+                n_negative=parsed_args.n_negative,
+                min_count=parsed_args.min_count,
+                tied_weights=parsed_args.tied_weights,
+                max_tokens=parsed_args.max_tokens,
+                sync_corpora_hook=parsed_args.sync_corpora,
+                device=parsed_args.device,
+                log_dir=parsed_args.log_dir,
+            )
 
         # Train model
         logger.info("Beginning training (%d epochs, batch_size=%d, lr=%.5f)...",
                     parsed_args.epochs, parsed_args.batch_size, parsed_args.lr)
-        history = w2v.train(
+        history = model_pipeline.train(
             epochs=parsed_args.epochs,
             batch_size=parsed_args.batch_size,
             lr=parsed_args.lr,
@@ -243,7 +260,7 @@ def main(args: Optional[List[str]] = None) -> int:
         logger.info("Training complete. Final loss: %.4f", history[-1] if history else 0.0)
 
         # Save embeddings to destination directory (auto-created if missing)
-        saved_file = w2v.save_embeddings(
+        saved_file = model_pipeline.save_embeddings(
             output_dir=parsed_args.output_dir,
             filename=parsed_args.output_filename,
             format=parsed_args.format,
@@ -254,7 +271,7 @@ def main(args: Optional[List[str]] = None) -> int:
         sample_words = ["dorian", "alice", "time", "captain", "sea", "art"]
         logger.info("Verifying semantic neighbor queries for sample tokens...")
         for word in sample_words:
-            sims = w2v.most_similar(word, top_k=3)
+            sims = model_pipeline.most_similar(word, top_k=3)
             if sims:
                 formatted = ", ".join([f"{w} ({s:+.4f})" for w, s in sims])
                 logger.info("Top neighbors for '%s': %s", word, formatted)

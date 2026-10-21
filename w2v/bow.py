@@ -1,8 +1,5 @@
 import logging
-import os
-import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -12,76 +9,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from w2v.data.dataset import SkipGramDataset
+from w2v.data.dataset import BaseWord2VecDataset, BoWDataset
 from w2v.data.downloader import ensure_nltk_gutenberg_corpora
 from w2v.preprocessing.tokenizer import BaseTokenizer, BasicTokenizer
+from w2v.skipgram import setup_logging
 
-# Loggers for each specific component
-logger = logging.getLogger("Word2Vec")
-model_logger = logging.getLogger("PairScalarModel")
+logger = logging.getLogger("BoW")
+model_logger = logging.getLogger("BoWModel")
 
 
-def setup_logging(
-    log_dir: Union[str, Path] = "./logs",
-    log_filename: Optional[str] = None,
-    level: int = logging.INFO,
-) -> Path:
+class BoWModel(nn.Module):
     """
-    Configures centralized logging for the Word2Vec application.
-    Logs are formatted with timestamp, log level, and component source name:
-      YYYY-MM-DD HH:MM:SS [LEVEL] [source_of_log]: message
-    Outputs simultaneously to the console and to an execution-specific .log file.
+    PyTorch implementation of the Continuous Bag-of-Words (CBOW / BoW) architecture
+    with Negative Sampling (Mikolov et al., 2013).
 
-    Args:
-        log_dir: Directory where log files are stored.
-        log_filename: Optional explicit file name. Defaults to 'word2vec_YYYYMMDD_HHMMSS.log'.
-        level: Logging severity threshold.
-
-    Returns:
-        Path to the generated log file.
-    """
-    dest = Path(log_dir)
-    dest.mkdir(parents=True, exist_ok=True)
-
-    if log_filename is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_filename = f"word2vec_{timestamp}.log"
-
-    log_path = (dest / log_filename).resolve()
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] [%(name)s]: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-
-    # Clear existing handlers to prevent duplicate logging upon re-initialization
-    for handler in list(root_logger.handlers):
-        root_logger.removeHandler(handler)
-
-    # File Handler: writes to timestamped .log file
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setLevel(level)
-    file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
-
-    # Console Handler: writes to stdout
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
-    logger.info("Logging initialized. Output file: %s", log_path)
-    return log_path
-
-
-class PairScalarModel(nn.Module):
-    """
-    PyTorch implementation of the Skip-Gram with Negative Sampling (SGNS) architecture.
-    Computes dot-product similarity between central word and context / negative words,
-    optimizing Negative Log-Likelihood via log-sigmoid loss.
+    Predicts the central target word given the mean embedding vector of its context words:
+      context_words (bag) -> center_word (target)
+    Optimizes Negative Log-Likelihood with log-sigmoid negative sampling.
     """
 
     def __init__(
@@ -95,57 +39,85 @@ class PairScalarModel(nn.Module):
         self.embedding_dim = embedding_dim
         self.tied_weights = tied_weights
 
-        self.in_embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=embedding_dim)
+        # Input context embeddings: averaged via native PyTorch EmbeddingBag (fast & memory-efficient)
+        self.in_embedding = nn.EmbeddingBag(
+            num_embeddings=vocab_size,
+            embedding_dim=embedding_dim,
+            mode="mean",
+        )
+
         if tied_weights:
-            self.out_embedding = self.in_embedding
+            self.out_embedding = None
         else:
-            self.out_embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=embedding_dim)
+            self.out_embedding = nn.Embedding(
+                num_embeddings=vocab_size,
+                embedding_dim=embedding_dim,
+            )
 
         model_logger.debug(
-            "Initialized PairScalarModel: vocab_size=%d, embedding_dim=%d, tied_weights=%s",
+            "Initialized BoWModel: vocab_size=%d, embedding_dim=%d, tied_weights=%s",
             vocab_size,
             embedding_dim,
             tied_weights,
         )
 
     @property
-    def embedding(self) -> nn.Embedding:
-        """Alias for backward compatibility with external code referencing model.embedding."""
+    def embedding(self) -> nn.EmbeddingBag:
+        """Alias for backward compatibility."""
         return self.in_embedding
 
     def forward(
         self,
-        id_central_word: torch.LongTensor,
-        id_context_word: torch.LongTensor,
-        ids_out_of_context_words: torch.LongTensor,
+        flat_contexts: torch.LongTensor,
+        offsets: torch.LongTensor,
+        targets: torch.LongTensor,
+        neg_samples: torch.LongTensor,
     ) -> torch.Tensor:
-        # central_emb: (batch_size, embedding_dim)
-        central_emb = self.in_embedding(id_central_word)
-        # context_emb: (batch_size, embedding_dim)
-        context_emb = self.out_embedding(id_context_word)
-        # out_of_context_embs: (batch_size, n_negative, embedding_dim)
-        out_of_context_embs = self.out_embedding(ids_out_of_context_words)
+        """
+        Forward pass for Continuous Bag-of-Words with Negative Sampling.
 
-        # Dot product between central and positive context embeddings -> (batch_size,)
-        pos_score = torch.sum(central_emb * context_emb, dim=1)
+        Args:
+            flat_contexts: 1D LongTensor of all context tokens across the batch.
+            offsets: 1D LongTensor of start positions in flat_contexts for each sample.
+            targets: 1D LongTensor of true center target tokens (batch_size,).
+            neg_samples: 2D LongTensor of drawn negative token IDs (batch_size, n_negative).
 
-        # Dot product between central and each negative sample -> (batch_size, n_negative)
-        neg_score = torch.einsum("bi,bni->bn", central_emb, out_of_context_embs)
+        Returns:
+            Mean negative log-likelihood loss for the batch.
+        """
+        # 1. Mean context embedding for each sample in batch: (batch_size, embedding_dim)
+        ctx_emb = self.in_embedding(flat_contexts, offsets)
 
-        # Standard SGNS (Mikolov et al., 2013) Negative Log-Likelihood:
-        # L = - log(sigmoid(pos_score)) - sum(log(sigmoid(-neg_score)))
+        # 2. Positive target word embeddings
+        if self.tied_weights:
+            target_emb = F.embedding(targets, self.in_embedding.weight)
+            neg_embs = F.embedding(neg_samples, self.in_embedding.weight)
+        else:
+            target_emb = self.out_embedding(targets)
+            neg_embs = self.out_embedding(neg_samples)
+
+        # 3. Dot product between mean context embedding and positive target: (batch_size,)
+        pos_score = torch.sum(ctx_emb * target_emb, dim=1)
+
+        # 4. Dot product between mean context embedding and negative samples: (batch_size, n_negative)
+        neg_score = torch.einsum("bd,bnd->bn", ctx_emb, neg_embs)
+
+        # 5. SGNS / CBOW Negative Sampling objective (Mikolov et al., 2013)
         loss = - F.logsigmoid(pos_score) - torch.sum(F.logsigmoid(-neg_score), dim=1)
         return loss.mean()
 
 
-class Word2Vec:
+CBOWModel = BoWModel
+
+
+class BoW:
     """
-    High-level Word2Vec Skip-Gram model and training pipeline.
+    High-level Continuous Bag-of-Words (CBOW / BoW) model and training pipeline.
+    Maintains the exact same parameter fingerprint as Word2Vec (Skip-Gram).
     Accepts either:
       1. A corpus directory (`corpus_dir`), from which individual documents are read,
-         tokenized with a `BaseTokenizer`, and packaged into a boundary-respecting `SkipGramDataset`.
-      2. A custom PyTorch `Dataset` (`dataset`), allowing users to provide their own
-         pre-built dataset implementation.
+         tokenized with a `BaseTokenizer`, and packaged into a boundary-respecting `BoWDataset`.
+      2. A custom PyTorch `Dataset` (`dataset`), allowing pre-built datasets.
     """
 
     def __init__(
@@ -164,7 +136,6 @@ class Word2Vec:
         tokenizer: Optional[BaseTokenizer] = None,
         log_dir: Union[str, Path] = "./logs",
     ):
-        # Auto-configure logging if not already configured by user
         if not logging.getLogger().handlers:
             setup_logging(log_dir=log_dir)
 
@@ -182,21 +153,26 @@ class Word2Vec:
         else:
             self.device = torch.device(device)
 
-        logger.info("Initializing Word2Vec on device '%s' (embedding_dim=%d, window_size=%d, n_negative=%d)",
-                    self.device, embedding_dim, window_size, n_negative)
+        logger.info(
+            "Initializing BoW on device '%s' (embedding_dim=%d, window_size=%d, n_negative=%d, tied_weights=%s)",
+            self.device,
+            embedding_dim,
+            window_size,
+            n_negative,
+            tied_weights,
+        )
 
         self.tokenizer: BaseTokenizer = tokenizer or BasicTokenizer()
         self.corpus_files: List[str] = []
         self.documents: List[List[str]] = []
         self.tokens: List[str] = []
         self.dataset: Optional[Dataset] = None
-        self.model: Optional[PairScalarModel] = None
-        self.history: List[float] = []
+        self.model: Optional[BoWModel] = None
 
         if dataset is not None:
             self.set_dataset(dataset, vocab_size=vocab_size)
         elif corpus_dir is not None:
-            self.dataset = SkipGramDataset(
+            self.dataset = BoWDataset(
                 corpus_dir=self.corpus_dir,
                 download=self.sync_corpora_hook,
                 tokenizer=self.tokenizer,
@@ -210,9 +186,18 @@ class Word2Vec:
             self.corpus_files = getattr(self.dataset, "corpus_files", [])
             self.init_model()
 
+    @property
+    def vocab_size(self) -> int:
+        """Total vocabulary size inferred from internal dataset or model."""
+        if self.dataset is not None and hasattr(self.dataset, "vocab_size"):
+            return self.dataset.vocab_size
+        if self.model is not None:
+            return self.model.vocab_size
+        return 0
+
     def set_dataset(self, dataset: Dataset, vocab_size: Optional[int] = None) -> None:
         """
-        Sets a custom PyTorch Dataset and initializes the underlying PairScalarModel.
+        Sets a custom PyTorch Dataset and initializes the underlying BoWModel.
         """
         self.dataset = dataset
 
@@ -226,11 +211,11 @@ class Word2Vec:
             logger.error("Could not infer `vocab_size` from custom dataset.")
             raise ValueError(
                 "Could not infer `vocab_size` from the custom dataset. "
-                "Please pass `vocab_size` explicitly to Word2Vec(dataset=..., vocab_size=...)."
+                "Please pass `vocab_size` explicitly to BoW(dataset=..., vocab_size=...)."
             )
 
-        logger.info("Attached custom dataset: vocab_size=%d, length=%d.", resolved_vocab_size, len(dataset))
-        self.model = PairScalarModel(
+        logger.info("Attached custom dataset to BoW: vocab_size=%d, length=%d.", resolved_vocab_size, len(dataset))
+        self.model = BoWModel(
             vocab_size=resolved_vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
@@ -245,9 +230,9 @@ class Word2Vec:
         the sliding context window strictly respects document boundaries.
         """
         corpus_path = Path(corpus_dir)
-        if not corpus_path.exists() or not corpus_path.is_dir():
-            logger.error("Corpus directory not found: '%s'", corpus_dir)
-            raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
+        corpus_path.mkdir(parents=True, exist_ok=True)
+        if self.sync_corpora_hook:
+            ensure_nltk_gutenberg_corpora(corpus_path)
 
         txt_files = sorted(list(corpus_path.glob("*.txt")))
         if not txt_files:
@@ -261,7 +246,7 @@ class Word2Vec:
         self.documents = []
         all_tokens = []
 
-        logger.info("Loading corpus from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files))
+        logger.info("Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files))
 
         for fpath in txt_files:
             try:
@@ -276,7 +261,6 @@ class Word2Vec:
             self.documents.append(file_tokens)
             all_tokens.extend(file_tokens)
 
-        # Apply token budget cap if requested, slicing documents cleanly
         if max_tokens is not None and len(all_tokens) > max_tokens:
             logger.info("Applying max_tokens=%d cap (from %d total tokens).", max_tokens, len(all_tokens))
             truncated_docs = []
@@ -297,12 +281,12 @@ class Word2Vec:
         self.tokens = all_tokens
         return all_tokens
 
-    def build_dataset(self) -> SkipGramDataset:
+    def build_dataset(self) -> BoWDataset:
         """
-        Builds the SkipGramDataset using the list of distinct documents (`self.documents`).
-        This guarantees that the sliding context window never crosses document boundaries.
+        Builds the BoWDataset using the list of distinct documents (`self.documents`).
+        Guarantees that the sliding context window never crosses document boundaries.
         """
-        if self.dataset is not None and isinstance(self.dataset, SkipGramDataset):
+        if self.dataset is not None and isinstance(self.dataset, BoWDataset):
             return self.dataset
 
         if not self.documents and not self.tokens:
@@ -310,28 +294,28 @@ class Word2Vec:
             raise ValueError("No tokens available. Please load corpus files first.")
 
         logger.info(
-            "Building Skip-Gram dataset: window_size=%d, n_negative=%d, min_count=%d across %d document(s).",
+            "Building BoW dataset: window_size=%d, n_negative=%d, min_count=%d across %d document(s).",
             self.window_size,
             self.n_negative,
             self.min_count,
             len(self.documents),
         )
 
-        self.dataset = SkipGramDataset(
+        self.dataset = BoWDataset(
             documents=self.documents if self.documents else [self.tokens],
             window_size=self.window_size,
             n_negative=self.n_negative,
             min_count=self.min_count,
         )
-        logger.info("Dataset built: vocabulary size = %d, total training pairs = %d.", self.dataset.vocab_size, len(self.dataset))
+        logger.info("BoW Dataset built: vocabulary size = %d, total training samples = %d.", self.dataset.vocab_size, len(self.dataset))
         return self.dataset
 
-    def init_model(self) -> PairScalarModel:
+    def init_model(self) -> BoWModel:
         """
-        Initializes the underlying PairScalarModel based on the dataset's vocabulary size.
+        Initializes the underlying BoWModel based on the dataset's vocabulary size.
         """
         if self.dataset is None:
-            logger.error("Dataset not built yet; cannot initialize model.")
+            logger.error("Dataset not built yet; cannot initialize BoW model.")
             raise ValueError("Dataset not built yet.")
 
         vocab_size = getattr(self.dataset, "vocab_size", None)
@@ -341,12 +325,12 @@ class Word2Vec:
             logger.error("Unable to determine vocab_size from dataset.")
             raise ValueError("Unable to determine vocab_size from dataset.")
 
-        self.model = PairScalarModel(
+        self.model = BoWModel(
             vocab_size=vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
         ).to(self.device)
-        logger.info("PairScalarModel instantiated on '%s' with %d vocabulary entries.", self.device, vocab_size)
+        logger.info("BoWModel instantiated on '%s' with %d vocabulary entries.", self.device, vocab_size)
         return self.model
 
     def train(
@@ -357,9 +341,8 @@ class Word2Vec:
         num_workers: int = 0,
     ) -> List[float]:
         """
-        Trains the Word2Vec model over the dataset across the specified number of epochs.
+        Trains the BoW model over the dataset across the specified number of epochs.
         """
-        # Pre-training hook check: ensure NLTK corpora are synced
         if self.sync_corpora_hook and self.corpus_dir is not None:
             ensure_nltk_gutenberg_corpora(self.corpus_dir)
 
@@ -379,19 +362,20 @@ class Word2Vec:
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         history = []
-        logger.info("Beginning training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.", epochs, batch_size, lr, self.device)
+        logger.info("Beginning BoW training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.", epochs, batch_size, lr, self.device)
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
             total_loss = 0.0
             num_batches = 0
-            for centers, contexts, neg_samples in dataloader:
-                centers = centers.to(self.device)
-                contexts = contexts.to(self.device)
+            for flat_contexts, offsets, targets, neg_samples in dataloader:
+                flat_contexts = flat_contexts.to(self.device)
+                offsets = offsets.to(self.device)
+                targets = targets.to(self.device)
                 neg_samples = neg_samples.to(self.device)
 
                 optimizer.zero_grad()
-                loss = self.model(centers, contexts, neg_samples)
+                loss = self.model(flat_contexts, offsets, targets, neg_samples)
                 loss.backward()
                 optimizer.step()
 
@@ -403,17 +387,8 @@ class Word2Vec:
             logger.info("Epoch [%d/%d] - Average Loss: %.4f across %d batches.", epoch, epochs, avg_loss, num_batches)
 
         elapsed = time.time() - start_time
-        logger.info("Training finished successfully in %.2f seconds (%.2f s/epoch).", elapsed, elapsed / max(epochs, 1))
+        logger.info("BoW Training finished successfully in %.2f seconds (%.2f s/epoch).", elapsed, elapsed / max(epochs, 1))
         return history
-
-    @property
-    def vocab_size(self) -> int:
-        """Total vocabulary size inferred from internal dataset or model."""
-        if self.dataset is not None and hasattr(self.dataset, "vocab_size"):
-            return self.dataset.vocab_size
-        if self.model is not None:
-            return self.model.vocab_size
-        return 0
 
     def get_embedding(self, word: str) -> Optional[np.ndarray]:
         """
@@ -430,14 +405,13 @@ class Word2Vec:
             return None
         idx = stoi[word]
         with torch.no_grad():
-            tensor_idx = torch.tensor([idx], dtype=torch.long, device=self.device)
-            in_emb = self.model.in_embedding(tensor_idx).squeeze(0)
+            in_emb = self.model.in_embedding.weight[idx]
             if (
                 not self.tied_weights
                 and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not self.model.in_embedding
+                and self.model.out_embedding is not None
             ):
-                out_emb = self.model.out_embedding(tensor_idx).squeeze(0)
+                out_emb = self.model.out_embedding.weight[idx]
                 emb = ((in_emb + out_emb) / 2.0).cpu().numpy()
             else:
                 emb = in_emb.cpu().numpy()
@@ -466,7 +440,7 @@ class Word2Vec:
             if (
                 not self.tied_weights
                 and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not self.model.in_embedding
+                and self.model.out_embedding is not None
             ):
                 weights = (self.model.in_embedding.weight.detach() + self.model.out_embedding.weight.detach()) / 2.0
             else:
@@ -494,22 +468,8 @@ class Word2Vec:
         Saves the learned word embeddings to the specified directory.
         If the destination directory does not exist, it is created automatically.
 
-        If tied_weights is False, saves the arithmetic mean of the in_embedding
+        If tied_weights is False, saves the arithmetic mean of in_embedding
         and out_embedding vectors for each token ((W_in + W_out) / 2.0).
-
-        Args:
-            output_dir: Destination folder path (created automatically if not present).
-            filename: Optional custom filename. Defaults to 'word2vec_embeddings.txt' (or .npz/.pt).
-            format: Storage format. Options:
-                    - 'word2vec' (default): Standard Google Word2Vec / Gensim text format.
-                      Header: "<vocab_size> <embedding_dim>"
-                      Lines:  "<word> <val_1> <val_2> ... <val_D>"
-                    - 'glove': Headerless text format ("<word> <val_1> ... <val_D>").
-                    - 'numpy' / 'npz': Compressed NumPy archive with 'words' and 'vectors'.
-                    - 'pt': PyTorch file containing a dictionary {"words": list, "vectors": tensor}.
-
-        Returns:
-            Path to the saved embedding file.
         """
         if self.model is None or self.dataset is None:
             logger.error("Cannot save embeddings: model or dataset is not initialized.")
@@ -528,7 +488,7 @@ class Word2Vec:
             if (
                 not self.tied_weights
                 and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not self.model.in_embedding
+                and self.model.out_embedding is not None
             ):
                 out_weights = self.model.out_embedding.weight.detach().cpu().numpy()
                 embeddings_matrix = (in_weights + out_weights) / 2.0
@@ -544,7 +504,7 @@ class Word2Vec:
         fmt = format.lower()
 
         if fmt in ("word2vec", "txt", "vec"):
-            out_filename = filename or "word2vec_embeddings.txt"
+            out_filename = filename or "bow_embeddings.txt"
             filepath = dest / out_filename
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(f"{vocab_size} {embedding_dim}\n")
@@ -559,7 +519,7 @@ class Word2Vec:
                     vec_str = " ".join(f"{val:.6f}" for val in vec)
                     f.write(f"{word} {vec_str}\n")
         elif fmt in ("numpy", "npz"):
-            out_filename = filename or "word2vec_embeddings.npz"
+            out_filename = filename or "bow_embeddings.npz"
             filepath = dest / out_filename
             np.savez_compressed(
                 filepath,
@@ -567,7 +527,7 @@ class Word2Vec:
                 vectors=embeddings_matrix.astype(np.float32),
             )
         elif fmt == "pt":
-            out_filename = filename or "word2vec_embeddings.pt"
+            out_filename = filename or "bow_embeddings.pt"
             filepath = dest / out_filename
             torch.save(
                 {
@@ -579,13 +539,14 @@ class Word2Vec:
         else:
             raise ValueError(f"Unsupported embedding format: '{format}'. Choose from 'word2vec', 'glove', 'numpy', 'pt'.")
 
-        logger.info("Word embeddings successfully saved to '%s' (%d words, dim=%d, format=%s).",
-                    filepath, vocab_size, embedding_dim, fmt)
+        logger.info(
+            "BoW Word embeddings successfully saved to '%s' (%d words, dim=%d, format=%s).",
+            filepath,
+            vocab_size,
+            embedding_dim,
+            fmt,
+        )
         return filepath
 
 
-def get_model(vocab_size: int, embedding_dim: int = 128) -> PairScalarModel:
-    """
-    Returns an instance of the PairScalarModel.
-    """
-    return PairScalarModel(vocab_size, embedding_dim)
+CBOW = BoW

@@ -34,10 +34,11 @@ word2vec/
 ├── w2v/                           # Core Python Package
 │   ├── __init__.py                # Public API exports
 │   ├── cli.py                     # Command-line interface (argparse)
-│   ├── word2vec.py                # SGNS architecture, pipeline & export
+│   ├── skipgram.py                # Skip-Gram (SGNS) architecture & pipeline
+│   ├── bow.py                     # Continuous Bag-of-Words (CBOW) architecture & pipeline
 │   ├── data/
 │   │   ├── __init__.py            # Dataset & downloader exports
-│   │   ├── dataset.py             # BaseWord2VecDataset & SkipGramDataset
+│   │   ├── dataset.py             # BaseWord2VecDataset, SkipGramDataset, BoWDataset
 │   │   └── downloader.py          # Delta Gutenberg ingestion hook
 │   └── preprocessing/
 │       ├── __init__.py            # Tokenizer exports
@@ -99,7 +100,7 @@ Run `w2v --help` at any time to display the parameter table:
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--model` | `skipgram` | Model architecture to use (`skipgram`). Ready for upcoming `cbow` / `bow`. |
+| `--model` | `skipgram` | Model architecture to use (`skipgram`, `bow`, `cbow`). |
 | `--embedding-dim` | `128` | Dimensionality of dense embedding vectors. |
 | `--window-size` | `2` | Context half-window size (tokens left and right). |
 | `--n-negative` | `5` | Number of negative samples drawn per positive pair. |
@@ -126,10 +127,10 @@ Run `w2v --help` at any time to display the parameter table:
 You can also import and customize the pipeline directly in your Python code:
 
 ```python
-from w2v import Word2Vec, SkipGramDataset, BasicTokenizer
+from w2v import SkipGram, BoW, SkipGramDataset, BoWDataset, BasicTokenizer
 
-# 1. Initialize Word2Vec with automatic corpus download & boundary protection
-w2v = Word2Vec(
+# 1. Initialize Skip-Gram with automatic corpus download & boundary protection
+sg = SkipGram(
     corpus_dir="./corpuses",
     embedding_dim=128,
     window_size=2,
@@ -140,20 +141,31 @@ w2v = Word2Vec(
 )
 
 # 2. Train the model across epochs
-history = w2v.train(epochs=5, batch_size=512, lr=0.005)
+history = sg.train(epochs=5, batch_size=512, lr=0.005)
 
 # 3. Export embeddings to disk
-saved_file = w2v.save_embeddings(output_dir="./embeddings", format="word2vec")
+saved_file = sg.save_embeddings(output_dir="./embeddings", format="word2vec")
 print(f"Embeddings saved to: {saved_file}")
 
 # 4. Perform cosine similarity semantic queries
-neighbors = w2v.most_similar("dorian", top_k=5)
+neighbors = sg.most_similar("dorian", top_k=5)
 for word, score in neighbors:
     print(f"  {word}: {score:+.4f}")
 
 # 5. Extract a single word vector as a NumPy array
-vector = w2v.get_embedding("alice")
+vector = sg.get_embedding("alice")
 print("Vector shape:", vector.shape)
+
+# Alternatively, initialize and train Continuous Bag-of-Words (CBOW / BoW)
+bow = BoW(
+    corpus_dir="./corpuses",
+    embedding_dim=128,
+    window_size=2,
+    n_negative=5,
+    min_count=3,
+    tied_weights=True,
+)
+bow_history = bow.train(epochs=5, batch_size=512, lr=0.005)
 ```
 
 ---
@@ -250,21 +262,21 @@ Using the `--format` option:
            │
            ▼
 [BaseWord2VecDataset] ◄── Abstract interface for Word2Vec family
-      ├── SkipGramDataset (Current)
-      └── CBOWDataset / BoWDataset (Upcoming)
+      ├── SkipGramDataset (Skip-Gram context pairs)
+      └── BoWDataset / CBOWDataset (Continuous Bag-of-Words)
            │
            ▼
-[PairScalarModel (SGNS) / CBOWModel]
+[SkipGramModel (SGNS) / BoWModel (CBOW)]
            │
            ▼
-[Word2Vec Engine / Trainer]
+[SkipGram / BoW Engines]
            │
            ▼
 [Vector Export: save_embeddings()]
 ```
 
-### Planned Continuous Bag-of-Words (CBOW / BoW) Support
-The abstract base class `BaseWord2VecDataset` in [`w2v.data.dataset`](file:///C:/Users/utente/repos/word2vec/w2v/data/dataset.py) defines the contract for vocabulary mapping and tensor generation. The upcoming CBOW model will slide across context windows to predict the central target word from the sum/mean of context tokens, sharing the same tokenizer, corpus synchronization, and export utilities.
+### Continuous Bag-of-Words (CBOW / BoW) Support
+The abstract base class `BaseWord2VecDataset` in [`w2v.data.dataset`](file:///C:/Users/utente/repos/word2vec/w2v/data/dataset.py) defines the contract for vocabulary mapping and tensor generation. The CBOW model slides across context windows to predict the central target word from the mean of context tokens using `nn.EmbeddingBag`, sharing the same tokenizer, corpus synchronization, and export utilities.
 
 ---
 
