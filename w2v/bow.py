@@ -1,7 +1,7 @@
 import logging
 import time
+from collections.abc import Sized
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from w2v.data.dataset import BaseWord2VecDataset, BoWDataset
+from w2v.data.dataset import BoWDataset
 from w2v.data.downloader import ensure_nltk_gutenberg_corpora
 from w2v.preprocessing.tokenizer import BaseTokenizer, BasicTokenizer
 from w2v.skipgram import setup_logging
@@ -89,7 +89,7 @@ class BoWModel(nn.Module):
         ctx_emb = self.in_embedding(flat_contexts, offsets)
 
         # 2. Positive target word embeddings
-        if self.tied_weights:
+        if self.tied_weights or self.out_embedding is None:
             target_emb = F.embedding(targets, self.in_embedding.weight)
             neg_embs = F.embedding(neg_samples, self.in_embedding.weight)
         else:
@@ -103,7 +103,7 @@ class BoWModel(nn.Module):
         neg_score = torch.einsum("bd,bnd->bn", ctx_emb, neg_embs)
 
         # 5. SGNS / CBOW Negative Sampling objective (Mikolov et al., 2013)
-        loss = - F.logsigmoid(pos_score) - torch.sum(F.logsigmoid(-neg_score), dim=1)
+        loss = -F.logsigmoid(pos_score) - torch.sum(F.logsigmoid(-neg_score), dim=1)
         return loss.mean()
 
 
@@ -122,19 +122,19 @@ class BoW:
 
     def __init__(
         self,
-        corpus_dir: Optional[Union[str, Path]] = None,
-        dataset: Optional[Dataset] = None,
-        vocab_size: Optional[int] = None,
+        corpus_dir: str | Path | None = None,
+        dataset: Dataset | None = None,
+        vocab_size: int | None = None,
         embedding_dim: int = 128,
         window_size: int = 2,
         n_negative: int = 5,
         min_count: int = 2,
         tied_weights: bool = True,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         sync_corpora_hook: bool = True,
-        device: Optional[Union[str, torch.device]] = None,
-        tokenizer: Optional[BaseTokenizer] = None,
-        log_dir: Union[str, Path] = "./logs",
+        device: str | torch.device | None = None,
+        tokenizer: BaseTokenizer | None = None,
+        log_dir: str | Path = "./logs",
     ):
         if not logging.getLogger().handlers:
             setup_logging(log_dir=log_dir)
@@ -163,11 +163,11 @@ class BoW:
         )
 
         self.tokenizer: BaseTokenizer = tokenizer or BasicTokenizer()
-        self.corpus_files: List[str] = []
-        self.documents: List[List[str]] = []
-        self.tokens: List[str] = []
-        self.dataset: Optional[Dataset] = None
-        self.model: Optional[BoWModel] = None
+        self.corpus_files: list[str] = []
+        self.documents: list[list[str]] = []
+        self.tokens: list[str] = []
+        self.dataset: Dataset | None = None
+        self.model: BoWModel | None = None
 
         if dataset is not None:
             self.set_dataset(dataset, vocab_size=vocab_size)
@@ -195,7 +195,7 @@ class BoW:
             return self.model.vocab_size
         return 0
 
-    def set_dataset(self, dataset: Dataset, vocab_size: Optional[int] = None) -> None:
+    def set_dataset(self, dataset: Dataset, vocab_size: int | None = None) -> None:
         """
         Sets a custom PyTorch Dataset and initializes the underlying BoWModel.
         """
@@ -203,9 +203,9 @@ class BoW:
 
         resolved_vocab_size = vocab_size
         if resolved_vocab_size is None and hasattr(dataset, "vocab_size"):
-            resolved_vocab_size = getattr(dataset, "vocab_size")
+            resolved_vocab_size = dataset.vocab_size
         elif resolved_vocab_size is None and hasattr(dataset, "stoi"):
-            resolved_vocab_size = len(getattr(dataset, "stoi"))
+            resolved_vocab_size = len(dataset.stoi)
 
         if resolved_vocab_size is None:
             logger.error("Could not infer `vocab_size` from custom dataset.")
@@ -214,16 +214,15 @@ class BoW:
                 "Please pass `vocab_size` explicitly to BoW(dataset=..., vocab_size=...)."
             )
 
-        logger.info("Attached custom dataset to BoW: vocab_size=%d, length=%d.", resolved_vocab_size, len(dataset))
+        dataset_len = len(dataset) if isinstance(dataset, Sized) else 0
+        logger.info("Attached custom dataset to BoW: vocab_size=%d, length=%d.", resolved_vocab_size, dataset_len)
         self.model = BoWModel(
             vocab_size=resolved_vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
         ).to(self.device)
 
-    def load_corpus_from_dir(
-        self, corpus_dir: Union[str, Path], max_tokens: Optional[int] = None
-    ) -> List[str]:
+    def load_corpus_from_dir(self, corpus_dir: str | Path, max_tokens: int | None = None) -> list[str]:
         """
         Reads and tokenizes each text file (*.txt) inside corpus_dir independently.
         Stores individual document token lists in `self.documents` so that
@@ -246,11 +245,13 @@ class BoW:
         self.documents = []
         all_tokens = []
 
-        logger.info("Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files))
+        logger.info(
+            "Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files)
+        )
 
         for fpath in txt_files:
             try:
-                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                with open(fpath, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
             except Exception as e:
                 logger.warning("Failed reading '%s': %s. Skipping document.", fpath.name, e)
@@ -277,7 +278,9 @@ class BoW:
             self.documents = truncated_docs
             all_tokens = [tok for d in self.documents for tok in d]
 
-        logger.info("Corpus ingestion complete: %d document(s) with %d total tokens.", len(self.documents), len(all_tokens))
+        logger.info(
+            "Corpus ingestion complete: %d document(s) with %d total tokens.", len(self.documents), len(all_tokens)
+        )
         self.tokens = all_tokens
         return all_tokens
 
@@ -307,7 +310,11 @@ class BoW:
             n_negative=self.n_negative,
             min_count=self.min_count,
         )
-        logger.info("BoW Dataset built: vocabulary size = %d, total training samples = %d.", self.dataset.vocab_size, len(self.dataset))
+        logger.info(
+            "BoW Dataset built: vocabulary size = %d, total training samples = %d.",
+            self.dataset.vocab_size,
+            len(self.dataset),
+        )
         return self.dataset
 
     def init_model(self) -> BoWModel:
@@ -320,18 +327,19 @@ class BoW:
 
         vocab_size = getattr(self.dataset, "vocab_size", None)
         if vocab_size is None and hasattr(self.dataset, "stoi"):
-            vocab_size = len(getattr(self.dataset, "stoi"))
+            vocab_size = len(self.dataset.stoi)
         if vocab_size is None:
             logger.error("Unable to determine vocab_size from dataset.")
             raise ValueError("Unable to determine vocab_size from dataset.")
 
-        self.model = BoWModel(
+        model = BoWModel(
             vocab_size=vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
         ).to(self.device)
+        self.model = model
         logger.info("BoWModel instantiated on '%s' with %d vocabulary entries.", self.device, vocab_size)
-        return self.model
+        return model
 
     def train(
         self,
@@ -339,7 +347,7 @@ class BoW:
         batch_size: int = 512,
         lr: float = 0.005,
         num_workers: int = 0,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Trains the BoW model over the dataset across the specified number of epochs.
         """
@@ -362,7 +370,13 @@ class BoW:
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         history = []
-        logger.info("Beginning BoW training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.", epochs, batch_size, lr, self.device)
+        logger.info(
+            "Beginning BoW training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.",
+            epochs,
+            batch_size,
+            lr,
+            self.device,
+        )
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
@@ -387,10 +401,12 @@ class BoW:
             logger.info("Epoch [%d/%d] - Average Loss: %.4f across %d batches.", epoch, epochs, avg_loss, num_batches)
 
         elapsed = time.time() - start_time
-        logger.info("BoW Training finished successfully in %.2f seconds (%.2f s/epoch).", elapsed, elapsed / max(epochs, 1))
+        logger.info(
+            "BoW Training finished successfully in %.2f seconds (%.2f s/epoch).", elapsed, elapsed / max(epochs, 1)
+        )
         return history
 
-    def get_embedding(self, word: str) -> Optional[np.ndarray]:
+    def get_embedding(self, word: str) -> np.ndarray | None:
         """
         Returns the learned embedding vector for a given word as a NumPy array.
         If tied_weights is False, returns the arithmetic mean of in_embedding and out_embedding.
@@ -406,18 +422,14 @@ class BoW:
         idx = stoi[word]
         with torch.no_grad():
             in_emb = self.model.in_embedding.weight[idx]
-            if (
-                not self.tied_weights
-                and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not None
-            ):
+            if not self.tied_weights and hasattr(self.model, "out_embedding") and self.model.out_embedding is not None:
                 out_emb = self.model.out_embedding.weight[idx]
                 emb = ((in_emb + out_emb) / 2.0).cpu().numpy()
             else:
                 emb = in_emb.cpu().numpy()
         return emb
 
-    def most_similar(self, word: str, top_k: int = 5) -> List[Tuple[str, float]]:
+    def most_similar(self, word: str, top_k: int = 5) -> list[tuple[str, float]]:
         """
         Finds the top_k most similar words using cosine similarity.
         If tied_weights is False, uses the mean of in_embedding and out_embedding matrices.
@@ -437,11 +449,7 @@ class BoW:
 
         target_idx = stoi[word]
         with torch.no_grad():
-            if (
-                not self.tied_weights
-                and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not None
-            ):
+            if not self.tied_weights and hasattr(self.model, "out_embedding") and self.model.out_embedding is not None:
                 weights = (self.model.in_embedding.weight.detach() + self.model.out_embedding.weight.detach()) / 2.0
             else:
                 weights = self.model.in_embedding.weight.detach()
@@ -460,8 +468,8 @@ class BoW:
 
     def save_embeddings(
         self,
-        output_dir: Union[str, Path] = "./embeddings",
-        filename: Optional[str] = None,
+        output_dir: str | Path = "./embeddings",
+        filename: str | None = None,
         format: str = "word2vec",
     ) -> Path:
         """
@@ -485,11 +493,7 @@ class BoW:
 
         with torch.no_grad():
             in_weights = self.model.in_embedding.weight.detach().cpu().numpy()
-            if (
-                not self.tied_weights
-                and hasattr(self.model, "out_embedding")
-                and self.model.out_embedding is not None
-            ):
+            if not self.tied_weights and hasattr(self.model, "out_embedding") and self.model.out_embedding is not None:
                 out_weights = self.model.out_embedding.weight.detach().cpu().numpy()
                 embeddings_matrix = (in_weights + out_weights) / 2.0
                 logger.info(
@@ -537,7 +541,9 @@ class BoW:
                 filepath,
             )
         else:
-            raise ValueError(f"Unsupported embedding format: '{format}'. Choose from 'word2vec', 'glove', 'numpy', 'pt'.")
+            raise ValueError(
+                f"Unsupported embedding format: '{format}'. Choose from 'word2vec', 'glove', 'numpy', 'pt'."
+            )
 
         logger.info(
             "BoW Word embeddings successfully saved to '%s' (%d words, dim=%d, format=%s).",

@@ -3,8 +3,8 @@ from w2v.data.downloader import ensure_nltk_gutenberg_corpora
 
 __all__ = [
     "BaseWord2VecDataset",
-    "SkipGramDataset",
     "BoWDataset",
     "CBOWDataset",
+    "SkipGramDataset",
     "ensure_nltk_gutenberg_corpora",
 ]

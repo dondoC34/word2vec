@@ -34,6 +34,9 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "jupyterlab>=4.1.6",
+    "mypy>=2.4.0",
+    "pre-commit<4.0",
+    "ruff>=0.17.1",
 ]
 
 [project.scripts]
@@ -41,3 +44,37 @@ w2v = "w2v.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["w2v"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "*.ipynb",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line length (handled by formatter or long logging/text)
+    "RUF012", # mutable default values in class bodies
+    "B905",   # zip() without an explicit strict= parameter
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["w2v"]
+ignore_missing_imports = true
+warn_unused_configs = true
+check_untyped_defs = true

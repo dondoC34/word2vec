@@ -1,7 +1,7 @@
 import logging
 import unicodedata
 from abc import ABC, abstractmethod
-from typing import Iterable, Iterator, List
+from collections.abc import Iterable, Iterator
 
 logger = logging.getLogger("Tokenizer")
 
@@ -13,13 +13,13 @@ class BaseTokenizer(ABC):
     """
 
     @abstractmethod
-    def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> list[str]:
         """
         Tokenize a single text string into a list of string tokens.
         """
         pass
 
-    def tokenize_corpus(self, corpus: Iterable[str]) -> Iterator[List[str]]:
+    def tokenize_corpus(self, corpus: Iterable[str]) -> Iterator[list[str]]:
         """
         Tokenize an iterable of texts, yielding token lists for each input text.
         """
@@ -44,12 +44,11 @@ class BasicTokenizer(BaseTokenizer):
         if self.remove_stopwords:
             try:
                 import nltk
+
                 nltk.download("stopwords", quiet=True)
                 from nltk.corpus import stopwords
 
-                self.stopwords = set(
-                    [word.replace("'", "") for word in stopwords.words("english")]
-                )
+                self.stopwords = set([word.replace("'", "") for word in stopwords.words("english")])
                 logger.info("Initialized BasicTokenizer with %d English stopwords removed.", len(self.stopwords))
             except Exception as e:
                 logger.warning("Failed to load NLTK stopwords: %s. Proceeding without stopword removal.", e)
@@ -73,7 +72,7 @@ class BasicTokenizer(BaseTokenizer):
             cleaned = cleaned.lower()
         return cleaned.strip()
 
-    def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> list[str]:
         """
         Tokenize a single text string into non-empty tokens.
         """

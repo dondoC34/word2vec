@@ -1,10 +1,9 @@
 import logging
-import os
 import sys
 import time
+from collections.abc import Sized
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -22,8 +21,8 @@ model_logger = logging.getLogger("SkipGramModel")
 
 
 def setup_logging(
-    log_dir: Union[str, Path] = "./logs",
-    log_filename: Optional[str] = None,
+    log_dir: str | Path = "./logs",
+    log_filename: str | None = None,
     level: int = logging.INFO,
 ) -> Path:
     """
@@ -134,7 +133,7 @@ class SkipGramModel(nn.Module):
 
         # Standard SGNS (Mikolov et al., 2013) Negative Log-Likelihood:
         # L = - log(sigmoid(pos_score)) - sum(log(sigmoid(-neg_score)))
-        loss = - F.logsigmoid(pos_score) - torch.sum(F.logsigmoid(-neg_score), dim=1)
+        loss = -F.logsigmoid(pos_score) - torch.sum(F.logsigmoid(-neg_score), dim=1)
         return loss.mean()
 
 
@@ -154,19 +153,19 @@ class SkipGram:
 
     def __init__(
         self,
-        corpus_dir: Optional[Union[str, Path]] = None,
-        dataset: Optional[Dataset] = None,
-        vocab_size: Optional[int] = None,
+        corpus_dir: str | Path | None = None,
+        dataset: Dataset | None = None,
+        vocab_size: int | None = None,
         embedding_dim: int = 128,
         window_size: int = 2,
         n_negative: int = 5,
         min_count: int = 2,
         tied_weights: bool = True,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         sync_corpora_hook: bool = True,
-        device: Optional[Union[str, torch.device]] = None,
-        tokenizer: Optional[BaseTokenizer] = None,
-        log_dir: Union[str, Path] = "./logs",
+        device: str | torch.device | None = None,
+        tokenizer: BaseTokenizer | None = None,
+        log_dir: str | Path = "./logs",
     ):
         # Auto-configure logging if not already configured by user
         if not logging.getLogger().handlers:
@@ -186,16 +185,21 @@ class SkipGram:
         else:
             self.device = torch.device(device)
 
-        logger.info("Initializing SkipGram on device '%s' (embedding_dim=%d, window_size=%d, n_negative=%d)",
-                    self.device, embedding_dim, window_size, n_negative)
+        logger.info(
+            "Initializing SkipGram on device '%s' (embedding_dim=%d, window_size=%d, n_negative=%d)",
+            self.device,
+            embedding_dim,
+            window_size,
+            n_negative,
+        )
 
         self.tokenizer: BaseTokenizer = tokenizer or BasicTokenizer()
-        self.corpus_files: List[str] = []
-        self.documents: List[List[str]] = []
-        self.tokens: List[str] = []
-        self.dataset: Optional[Dataset] = None
-        self.model: Optional[SkipGramModel] = None
-        self.history: List[float] = []
+        self.corpus_files: list[str] = []
+        self.documents: list[list[str]] = []
+        self.tokens: list[str] = []
+        self.dataset: Dataset | None = None
+        self.model: SkipGramModel | None = None
+        self.history: list[float] = []
 
         if dataset is not None:
             self.set_dataset(dataset, vocab_size=vocab_size)
@@ -214,7 +218,7 @@ class SkipGram:
             self.corpus_files = getattr(self.dataset, "corpus_files", [])
             self.init_model()
 
-    def set_dataset(self, dataset: Dataset, vocab_size: Optional[int] = None) -> None:
+    def set_dataset(self, dataset: Dataset, vocab_size: int | None = None) -> None:
         """
         Sets a custom PyTorch Dataset and initializes the underlying SkipGramModel.
         """
@@ -222,9 +226,9 @@ class SkipGram:
 
         resolved_vocab_size = vocab_size
         if resolved_vocab_size is None and hasattr(dataset, "vocab_size"):
-            resolved_vocab_size = getattr(dataset, "vocab_size")
+            resolved_vocab_size = dataset.vocab_size
         elif resolved_vocab_size is None and hasattr(dataset, "stoi"):
-            resolved_vocab_size = len(getattr(dataset, "stoi"))
+            resolved_vocab_size = len(dataset.stoi)
 
         if resolved_vocab_size is None:
             logger.error("Could not infer `vocab_size` from custom dataset.")
@@ -233,16 +237,15 @@ class SkipGram:
                 "Please pass `vocab_size` explicitly to SkipGram(dataset=..., vocab_size=...)."
             )
 
-        logger.info("Attached custom dataset: vocab_size=%d, length=%d.", resolved_vocab_size, len(dataset))
+        dataset_len = len(dataset) if isinstance(dataset, Sized) else 0
+        logger.info("Attached custom dataset: vocab_size=%d, length=%d.", resolved_vocab_size, dataset_len)
         self.model = SkipGramModel(
             vocab_size=resolved_vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
         ).to(self.device)
 
-    def load_corpus_from_dir(
-        self, corpus_dir: Union[str, Path], max_tokens: Optional[int] = None
-    ) -> List[str]:
+    def load_corpus_from_dir(self, corpus_dir: str | Path, max_tokens: int | None = None) -> list[str]:
         """
         Reads and tokenizes each text file (*.txt) inside corpus_dir independently.
         Stores individual document token lists in `self.documents` so that
@@ -269,7 +272,7 @@ class SkipGram:
 
         for fpath in txt_files:
             try:
-                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                with open(fpath, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
             except Exception as e:
                 logger.warning("Failed reading '%s': %s. Skipping document.", fpath.name, e)
@@ -297,7 +300,9 @@ class SkipGram:
             self.documents = truncated_docs
             all_tokens = [tok for d in self.documents for tok in d]
 
-        logger.info("Corpus ingestion complete: %d document(s) with %d total tokens.", len(self.documents), len(all_tokens))
+        logger.info(
+            "Corpus ingestion complete: %d document(s) with %d total tokens.", len(self.documents), len(all_tokens)
+        )
         self.tokens = all_tokens
         return all_tokens
 
@@ -327,7 +332,11 @@ class SkipGram:
             n_negative=self.n_negative,
             min_count=self.min_count,
         )
-        logger.info("Dataset built: vocabulary size = %d, total training pairs = %d.", self.dataset.vocab_size, len(self.dataset))
+        logger.info(
+            "Dataset built: vocabulary size = %d, total training pairs = %d.",
+            self.dataset.vocab_size,
+            len(self.dataset),
+        )
         return self.dataset
 
     def init_model(self) -> SkipGramModel:
@@ -340,18 +349,19 @@ class SkipGram:
 
         vocab_size = getattr(self.dataset, "vocab_size", None)
         if vocab_size is None and hasattr(self.dataset, "stoi"):
-            vocab_size = len(getattr(self.dataset, "stoi"))
+            vocab_size = len(self.dataset.stoi)
         if vocab_size is None:
             logger.error("Unable to determine vocab_size from dataset.")
             raise ValueError("Unable to determine vocab_size from dataset.")
 
-        self.model = SkipGramModel(
+        model = SkipGramModel(
             vocab_size=vocab_size,
             embedding_dim=self.embedding_dim,
             tied_weights=self.tied_weights,
         ).to(self.device)
+        self.model = model
         logger.info("SkipGramModel instantiated on '%s' with %d vocabulary entries.", self.device, vocab_size)
-        return self.model
+        return model
 
     def train(
         self,
@@ -359,7 +369,7 @@ class SkipGram:
         batch_size: int = 512,
         lr: float = 0.005,
         num_workers: int = 0,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Trains the Word2Vec model over the dataset across the specified number of epochs.
         """
@@ -383,7 +393,9 @@ class SkipGram:
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         history = []
-        logger.info("Beginning training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.", epochs, batch_size, lr, self.device)
+        logger.info(
+            "Beginning training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.", epochs, batch_size, lr, self.device
+        )
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
@@ -419,7 +431,7 @@ class SkipGram:
             return self.model.vocab_size
         return 0
 
-    def get_embedding(self, word: str) -> Optional[np.ndarray]:
+    def get_embedding(self, word: str) -> np.ndarray | None:
         """
         Returns the learned embedding vector for a given word as a NumPy array.
         If tied_weights is False, returns the arithmetic mean of in_embedding and out_embedding.
@@ -447,7 +459,7 @@ class SkipGram:
                 emb = in_emb.cpu().numpy()
         return emb
 
-    def most_similar(self, word: str, top_k: int = 5) -> List[Tuple[str, float]]:
+    def most_similar(self, word: str, top_k: int = 5) -> list[tuple[str, float]]:
         """
         Finds the top_k most similar words using cosine similarity.
         If tied_weights is False, uses the mean of in_embedding and out_embedding matrices.
@@ -490,8 +502,8 @@ class SkipGram:
 
     def save_embeddings(
         self,
-        output_dir: Union[str, Path] = "./embeddings",
-        filename: Optional[str] = None,
+        output_dir: str | Path = "./embeddings",
+        filename: str | None = None,
         format: str = "word2vec",
     ) -> Path:
         """
@@ -581,10 +593,17 @@ class SkipGram:
                 filepath,
             )
         else:
-            raise ValueError(f"Unsupported embedding format: '{format}'. Choose from 'word2vec', 'glove', 'numpy', 'pt'.")
+            raise ValueError(
+                f"Unsupported embedding format: '{format}'. Choose from 'word2vec', 'glove', 'numpy', 'pt'."
+            )
 
-        logger.info("Word embeddings successfully saved to '%s' (%d words, dim=%d, format=%s).",
-                    filepath, vocab_size, embedding_dim, fmt)
+        logger.info(
+            "Word embeddings successfully saved to '%s' (%d words, dim=%d, format=%s).",
+            filepath,
+            vocab_size,
+            embedding_dim,
+            fmt,
+        )
         return filepath
 
 

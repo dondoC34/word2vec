@@ -6,8 +6,6 @@ Built using Python's standard library `argparse`.
 import argparse
 import logging
 import sys
-from pathlib import Path
-from typing import List, Optional
 
 from w2v.bow import BoW
 from w2v.skipgram import SkipGram, setup_logging
@@ -197,7 +195,7 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(args: Optional[List[str]] = None) -> int:
+def main(args: list[str] | None = None) -> int:
     parser = create_parser()
     parsed_args = parser.parse_args(args)
 
@@ -210,16 +208,27 @@ def main(args: Optional[List[str]] = None) -> int:
     logger.info("=" * 70)
     logger.info("w2v CLI: Starting Word2Vec training and embedding generation")
     logger.info("Log file active: %s", log_file)
-    logger.info("Configuration: model=%s, dim=%d, window=%d, n_neg=%d, min_count=%d, tied_weights=%s",
-                parsed_args.model, parsed_args.embedding_dim, parsed_args.window_size,
-                parsed_args.n_negative, parsed_args.min_count, parsed_args.tied_weights)
-    logger.info("Corpus directory: %s (auto-sync: %s, max_tokens: %s)",
-                parsed_args.corpus_dir, parsed_args.sync_corpora, parsed_args.max_tokens)
+    logger.info(
+        "Configuration: model=%s, dim=%d, window=%d, n_neg=%d, min_count=%d, tied_weights=%s",
+        parsed_args.model,
+        parsed_args.embedding_dim,
+        parsed_args.window_size,
+        parsed_args.n_negative,
+        parsed_args.min_count,
+        parsed_args.tied_weights,
+    )
+    logger.info(
+        "Corpus directory: %s (auto-sync: %s, max_tokens: %s)",
+        parsed_args.corpus_dir,
+        parsed_args.sync_corpora,
+        parsed_args.max_tokens,
+    )
     logger.info("Output directory: %s (format: %s)", parsed_args.output_dir, parsed_args.format)
     logger.info("=" * 70)
 
     try:
         # Instantiate requested architecture (Word2Vec / Skip-Gram or BoW / CBOW)
+        model_pipeline: BoW | SkipGram
         if parsed_args.model.lower() in ("bow", "cbow"):
             logger.info("Initializing Continuous Bag-of-Words (BoW / CBOW) engine...")
             model_pipeline = BoW(
@@ -250,8 +259,12 @@ def main(args: Optional[List[str]] = None) -> int:
             )
 
         # Train model
-        logger.info("Beginning training (%d epochs, batch_size=%d, lr=%.5f)...",
-                    parsed_args.epochs, parsed_args.batch_size, parsed_args.lr)
+        logger.info(
+            "Beginning training (%d epochs, batch_size=%d, lr=%.5f)...",
+            parsed_args.epochs,
+            parsed_args.batch_size,
+            parsed_args.lr,
+        )
         history = model_pipeline.train(
             epochs=parsed_args.epochs,
             batch_size=parsed_args.batch_size,

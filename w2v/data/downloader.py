@@ -1,14 +1,13 @@
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
 
 logger = logging.getLogger("DataDownloader")
 
 
 def ensure_nltk_gutenberg_corpora(
-    target_dir: Union[str, Path] = "./corpuses",
-    target_corpora: Optional[List[str]] = None,
-) -> List[Path]:
+    target_dir: str | Path = "./corpuses",
+    target_corpora: list[str] | None = None,
+) -> list[Path]:
     """
     Data ingestion and synchronization utility:
     Ensures that a selection of classic literary works from NLTK Gutenberg
@@ -64,7 +63,7 @@ def ensure_nltk_gutenberg_corpora(
         logger.error("Failed to import or download NLTK gutenberg package: %s", e)
         return []
 
-    downloaded: List[Path] = []
+    downloaded: list[Path] = []
     for fname in missing:
         try:
             raw_text = gutenberg.raw(fname)
@@ -76,5 +75,7 @@ def ensure_nltk_gutenberg_corpora(
         except Exception as e:
             logger.error("Failed to write corpus file '%s': %s", fname, e)
 
-    logger.info("Delta synchronization finished: %d new file(s) successfully written to '%s'.", len(downloaded), target_dir)
+    logger.info(
+        "Delta synchronization finished: %d new file(s) successfully written to '%s'.", len(downloaded), target_dir
+    )
     return downloaded

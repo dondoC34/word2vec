@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -50,13 +50,13 @@ class SkipGramDataset(BaseWord2VecDataset):
 
     def __init__(
         self,
-        corpus_dir: Optional[Union[str, Path]] = None,
+        corpus_dir: str | Path | None = None,
         download: bool = False,
-        tokenizer: Optional[BaseTokenizer] = None,
-        max_tokens: Optional[int] = None,
-        corpus: Optional[Union[List[str], List[List[str]]]] = None,
-        tokens: Optional[List[str]] = None,
-        documents: Optional[List[List[str]]] = None,
+        tokenizer: BaseTokenizer | None = None,
+        max_tokens: int | None = None,
+        corpus: list[str] | list[list[str]] | None = None,
+        tokens: list[str] | None = None,
+        documents: list[list[str]] | None = None,
         window_size: int = 2,
         n_negative: int = 5,
         min_count: int = 1,
@@ -79,9 +79,9 @@ class SkipGramDataset(BaseWord2VecDataset):
         self.window_size = window_size
         self.n_negative = n_negative
         self.min_count = min_count
-        self.corpus_files: List[str] = []
+        self.corpus_files: list[str] = []
 
-        docs: List[List[str]] = []
+        docs: list[list[str]] = []
 
         # Case 1: Ingest from corpus_dir directly (PyTorch dataset pattern)
         if corpus_dir is not None:
@@ -108,14 +108,16 @@ class SkipGramDataset(BaseWord2VecDataset):
             logger.info("Loading corpus from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files))
             for fpath in txt_files:
                 try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(fpath, encoding="utf-8", errors="ignore") as f:
                         content = f.read()
                 except Exception as e:
                     logger.warning("Failed reading '%s': %s. Skipping document.", fpath.name, e)
                     continue
 
                 file_tokens = tok.tokenize(content)
-                logger.info("Parsed document '%s': %d tokens (%d characters).", fpath.name, len(file_tokens), len(content))
+                logger.info(
+                    "Parsed document '%s': %d tokens (%d characters).", fpath.name, len(file_tokens), len(content)
+                )
                 docs.append(file_tokens)
 
             # Apply token budget cap if requested, slicing documents cleanly
@@ -149,8 +151,8 @@ class SkipGramDataset(BaseWord2VecDataset):
         else:
             raise ValueError("Must provide either 'corpus_dir', 'corpus', 'documents', or 'tokens' to SkipGramDataset.")
 
-        self.documents: List[List[str]] = docs
-        self.tokens: List[str] = [tok for d in docs for tok in d]
+        self.documents: list[list[str]] = docs
+        self.tokens: list[str] = [tok for d in docs for tok in d]
         self.num_documents = len(docs)
         total_raw_tokens = len(self.tokens)
         logger.info(
@@ -168,8 +170,8 @@ class SkipGramDataset(BaseWord2VecDataset):
         filtered_words = [w for w, count in raw_counts.items() if count >= min_count]
         filtered_counts = {w: raw_counts[w] for w in filtered_words}
 
-        self.itos: List[str] = list(filtered_counts.keys())
-        self.stoi: Dict[str, int] = {w: i for i, w in enumerate(self.itos)}
+        self.itos: list[str] = list(filtered_counts.keys())
+        self.stoi: dict[str, int] = {w: i for i, w in enumerate(self.itos)}
         self._vocab_size: int = len(self.itos)
 
         if self._vocab_size == 0:
@@ -185,15 +187,15 @@ class SkipGramDataset(BaseWord2VecDataset):
 
         # Step 2: Unigram distribution raised to the 0.75 power for negative sampling (Mikolov et al.)
         freqs = np.array([filtered_counts[w] for w in self.itos], dtype=np.float64)
-        unigram_dist = freqs ** 0.75
+        unigram_dist = freqs**0.75
         self.neg_sampling_dist = unigram_dist / unigram_dist.sum()
         self.neg_dist_tensor = torch.tensor(self.neg_sampling_dist, dtype=torch.float32)
 
         # Step 3: Generate center-context pairs per document
         # CRITICAL: We iterate document by document so that the sliding window
         # is strictly bounded within each document. No pairs cross from doc N to doc N+1.
-        self.pairs: List[Tuple[int, int]] = []
-        for doc_idx, doc in enumerate(docs):
+        self.pairs: list[tuple[int, int]] = []
+        for doc in docs:
             # Map tokens in the current document to their integer vocabulary IDs
             doc_ids = [self.stoi[t] for t in doc if t in self.stoi]
             doc_len = len(doc_ids)
@@ -220,14 +222,14 @@ class SkipGramDataset(BaseWord2VecDataset):
     def __len__(self) -> int:
         return len(self.pairs)
 
-    def __getitem__(self, idx: int) -> Tuple[int, int]:
+    def __getitem__(self, idx: int) -> tuple[int, int]:
         """
         Fast O(1) lookup returning the (center_id, context_id) pair.
         Negative samples are generated in bulk at the batch level via collate_fn.
         """
         return self.pairs[idx]
 
-    def collate_fn(self, batch: List[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def collate_fn(self, batch: list[tuple[int, int]]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Vectorized batch collation for high-performance training with DataLoader.
         Draws negative samples in bulk via a single C++/CUDA torch.multinomial kernel call.
@@ -253,13 +255,13 @@ class BoWDataset(BaseWord2VecDataset):
 
     def __init__(
         self,
-        corpus_dir: Optional[Union[str, Path]] = None,
+        corpus_dir: str | Path | None = None,
         download: bool = False,
-        tokenizer: Optional[BaseTokenizer] = None,
-        max_tokens: Optional[int] = None,
-        corpus: Optional[Union[List[str], List[List[str]]]] = None,
-        tokens: Optional[List[str]] = None,
-        documents: Optional[List[List[str]]] = None,
+        tokenizer: BaseTokenizer | None = None,
+        max_tokens: int | None = None,
+        corpus: list[str] | list[list[str]] | None = None,
+        tokens: list[str] | None = None,
+        documents: list[list[str]] | None = None,
         window_size: int = 2,
         n_negative: int = 5,
         min_count: int = 1,
@@ -282,9 +284,9 @@ class BoWDataset(BaseWord2VecDataset):
         self.window_size = window_size
         self.n_negative = n_negative
         self.min_count = min_count
-        self.corpus_files: List[str] = []
+        self.corpus_files: list[str] = []
 
-        docs: List[List[str]] = []
+        docs: list[list[str]] = []
 
         # Case 1: Ingest from corpus_dir directly
         if corpus_dir is not None:
@@ -308,17 +310,21 @@ class BoWDataset(BaseWord2VecDataset):
             self.corpus_files = [str(f) for f in txt_files]
             tok = tokenizer or BasicTokenizer()
 
-            logger.info("Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files))
+            logger.info(
+                "Loading corpus for BoW from directory '%s': %d document file(s) found.", corpus_dir, len(txt_files)
+            )
             for fpath in txt_files:
                 try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(fpath, encoding="utf-8", errors="ignore") as f:
                         content = f.read()
                 except Exception as e:
                     logger.warning("Failed reading '%s': %s. Skipping document.", fpath.name, e)
                     continue
 
                 file_tokens = tok.tokenize(content)
-                logger.info("Parsed document '%s': %d tokens (%d characters).", fpath.name, len(file_tokens), len(content))
+                logger.info(
+                    "Parsed document '%s': %d tokens (%d characters).", fpath.name, len(file_tokens), len(content)
+                )
                 docs.append(file_tokens)
 
             # Apply token budget cap if requested
@@ -352,8 +358,8 @@ class BoWDataset(BaseWord2VecDataset):
         else:
             raise ValueError("Must provide either 'corpus_dir', 'corpus', 'documents', or 'tokens' to BoWDataset.")
 
-        self.documents: List[List[str]] = docs
-        self.tokens: List[str] = [tok for d in docs for tok in d]
+        self.documents: list[list[str]] = docs
+        self.tokens: list[str] = [tok for d in docs for tok in d]
         self.num_documents = len(docs)
         total_raw_tokens = len(self.tokens)
         logger.info(
@@ -370,8 +376,8 @@ class BoWDataset(BaseWord2VecDataset):
         filtered_words = [w for w, count in raw_counts.items() if count >= min_count]
         filtered_counts = {w: raw_counts[w] for w in filtered_words}
 
-        self.itos: List[str] = list(filtered_counts.keys())
-        self.stoi: Dict[str, int] = {w: i for i, w in enumerate(self.itos)}
+        self.itos: list[str] = list(filtered_counts.keys())
+        self.stoi: dict[str, int] = {w: i for i, w in enumerate(self.itos)}
         self._vocab_size: int = len(self.itos)
 
         if self._vocab_size == 0:
@@ -387,13 +393,13 @@ class BoWDataset(BaseWord2VecDataset):
 
         # Step 2: Unigram distribution raised to 0.75 for negative sampling
         freqs = np.array([filtered_counts[w] for w in self.itos], dtype=np.float64)
-        unigram_dist = freqs ** 0.75
+        unigram_dist = freqs**0.75
         self.neg_sampling_dist = unigram_dist / unigram_dist.sum()
         self.neg_dist_tensor = torch.tensor(self.neg_sampling_dist, dtype=torch.float32)
 
         # Step 3: Generate (context_tokens, center_target) samples per document
         # Strict boundary protection: context never crosses document boundaries
-        self.samples: List[Tuple[List[int], int]] = []
+        self.samples: list[tuple[list[int], int]] = []
         for doc in docs:
             doc_ids = [self.stoi[t] for t in doc if t in self.stoi]
             doc_len = len(doc_ids)
@@ -420,12 +426,12 @@ class BoWDataset(BaseWord2VecDataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[List[int], int]:
+    def __getitem__(self, idx: int) -> tuple[list[int], int]:
         return self.samples[idx]
 
     def collate_fn(
-        self, batch: List[Tuple[List[int], int]]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        self, batch: list[tuple[list[int], int]]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Vectorized collation for BoW/CBOW.
         Returns:
