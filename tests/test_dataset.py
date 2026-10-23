@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -128,6 +128,8 @@ def test_invalid_inputs_raise_errors(tmp_path: Path) -> None:
 
 
 def test_downloader_target_corpora(tmp_path: Path) -> None:
-    with patch("nltk.download"), patch("nltk.corpus.gutenberg.raw", return_value="dummy text"):
+    mock_gutenberg = MagicMock()
+    mock_gutenberg.raw.return_value = "dummy text"
+    with patch("nltk.download"), patch("nltk.corpus.gutenberg", mock_gutenberg):
         downloaded = ensure_nltk_gutenberg_corpora(tmp_path)
         assert len(downloaded) == 18
