@@ -133,3 +133,27 @@ def test_downloader_target_corpora(tmp_path: Path) -> None:
     with patch("nltk.download"), patch("nltk.corpus.gutenberg", mock_gutenberg):
         downloaded = ensure_nltk_gutenberg_corpora(tmp_path)
         assert len(downloaded) == 18
+
+    # When all files already exist, should return [] without calling nltk
+    downloaded_again = ensure_nltk_gutenberg_corpora(tmp_path)
+    assert downloaded_again == []
+
+
+def test_dataset_corpus_arg_and_budget_cap(tmp_path: Path) -> None:
+    # Single list corpus
+    ds1 = SkipGramDataset(corpus=["one", "two", "three"], min_count=1)
+    assert ds1.vocab_size == 3
+
+    # Nested list corpus
+    ds2 = SkipGramDataset(corpus=[["a", "b"], ["c", "d"]], min_count=1)
+    assert ds2.vocab_size == 4
+
+    # Min count discards all words
+    with pytest.raises(ValueError, match="Vocabulary is empty"):
+        SkipGramDataset(tokens=["rare1", "rare2"], min_count=10)
+
+    # Max tokens slicing across documents
+    (tmp_path / "d1.txt").write_text("w1 w2 w3", encoding="utf-8")
+    (tmp_path / "d2.txt").write_text("w4 w5 w6", encoding="utf-8")
+    ds3 = SkipGramDataset(corpus_dir=tmp_path, max_tokens=4, min_count=1)
+    assert sum(len(d) for d in ds3.documents) == 4
