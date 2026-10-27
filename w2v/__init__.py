@@ -4,6 +4,7 @@ Provides end-to-end multi-document tokenization, boundary-protected pair generat
 PyTorch SGNS architecture, model training, and embedding export.
 """
 
+from w2v.base import BaseWord2Vec
 from w2v.bow import CBOW, BoW, BoWModel, CBOWModel
 from w2v.cli import create_parser
 from w2v.cli import main as cli_main
@@ -17,6 +18,7 @@ __version__ = "0.1.0"
 __all__ = [
     "CBOW",
     "BaseTokenizer",
+    "BaseWord2Vec",
     "BaseWord2VecDataset",
     "BasicTokenizer",
     "BoW",

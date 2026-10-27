@@ -228,35 +228,24 @@ def main(args: list[str] | None = None) -> int:
 
     try:
         # Instantiate requested architecture (Word2Vec / Skip-Gram or BoW / CBOW)
-        model_pipeline: BoW | SkipGram
-        if parsed_args.model.lower() in ("bow", "cbow"):
-            logger.info("Initializing Continuous Bag-of-Words (BoW / CBOW) engine...")
-            model_pipeline = BoW(
-                corpus_dir=parsed_args.corpus_dir,
-                embedding_dim=parsed_args.embedding_dim,
-                window_size=parsed_args.window_size,
-                n_negative=parsed_args.n_negative,
-                min_count=parsed_args.min_count,
-                tied_weights=parsed_args.tied_weights,
-                max_tokens=parsed_args.max_tokens,
-                sync_corpora_hook=parsed_args.sync_corpora,
-                device=parsed_args.device,
-                log_dir=parsed_args.log_dir,
-            )
-        else:
-            logger.info("Initializing Skip-Gram with Negative Sampling (SGNS) engine...")
-            model_pipeline = SkipGram(
-                corpus_dir=parsed_args.corpus_dir,
-                embedding_dim=parsed_args.embedding_dim,
-                window_size=parsed_args.window_size,
-                n_negative=parsed_args.n_negative,
-                min_count=parsed_args.min_count,
-                tied_weights=parsed_args.tied_weights,
-                max_tokens=parsed_args.max_tokens,
-                sync_corpora_hook=parsed_args.sync_corpora,
-                device=parsed_args.device,
-                log_dir=parsed_args.log_dir,
-            )
+        is_bow = parsed_args.model.lower() in ("bow", "cbow")
+        model_cls = BoW if is_bow else SkipGram
+        logger.info(
+            "Initializing %s engine...",
+            "Continuous Bag-of-Words (BoW / CBOW)" if is_bow else "Skip-Gram with Negative Sampling (SGNS)",
+        )
+        model_pipeline = model_cls(
+            corpus_dir=parsed_args.corpus_dir,
+            embedding_dim=parsed_args.embedding_dim,
+            window_size=parsed_args.window_size,
+            n_negative=parsed_args.n_negative,
+            min_count=parsed_args.min_count,
+            tied_weights=parsed_args.tied_weights,
+            max_tokens=parsed_args.max_tokens,
+            sync_corpora_hook=parsed_args.sync_corpora,
+            device=parsed_args.device,
+            log_dir=parsed_args.log_dir,
+        )
 
         # Train model
         logger.info(
