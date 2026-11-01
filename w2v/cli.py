@@ -30,7 +30,7 @@ class W2VArgumentParser(argparse.ArgumentParser):
             ("--min-count", "3", "Minimum token frequency threshold (discards rare words)."),
             ("--tied-weights / --no-tied-weights", "True", "If False, saves arithmetic mean of (W_in + W_out) / 2."),
             ("--corpus-dir", "./corpuses", "Directory containing text documents (*.txt)."),
-            ("--sync-corpora / --no-sync-corpora", "True", "Automatic download and sync of delta NLTK corpora."),
+            ("--sync-corpora / --no-sync-corpora", "False", "Automatic download and sync of delta NLTK corpora."),
             ("--max-tokens", "None", "Optional maximum token budget across all documents."),
             ("--epochs", "5", "Number of training epochs."),
             ("--batch-size", "512", "Mini-batch size for DataLoader."),
@@ -124,7 +124,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sync-corpora",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Automatic download and sync of delta NLTK corpora.",
     )
     parser.add_argument(

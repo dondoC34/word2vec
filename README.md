@@ -107,7 +107,7 @@ Run `w2v --help` at any time to display the parameter table:
 | `--min-count` | `3` | Minimum token frequency threshold (discards rare words). |
 | `--tied-weights` / `--no-tied-weights` | `True` | If False, saves arithmetic mean of $(\mathbf{W}_{\text{in}} + \mathbf{W}_{\text{out}}) / 2$. |
 | `--corpus-dir` | `./corpuses` | Directory containing text documents (`*.txt`). |
-| `--sync-corpora` / `--no-sync-corpora` | `True` | Automatic download and sync of missing NLTK Gutenberg corpora. |
+| `--sync-corpora` / `--no-sync-corpora` | `False` | Automatic download and sync of missing NLTK Gutenberg corpora (disabled by default). |
 | `--max-tokens` | `None` | Optional maximum token budget across all documents. |
 | `--epochs` | `5` | Number of training epochs. |
 | `--batch-size` | `512` | Mini-batch size for DataLoader. |
@@ -172,28 +172,33 @@ bow_history = bow.train(epochs=5, batch_size=512, lr=0.005)
 
 ## Corpora Management & Ingestion
 
-### 1. Automatic NLTK Gutenberg Synchronization
-By default, `w2v` checks the corpus directory (`./corpuses`) before training. If classic literary benchmark texts (e.g. Carroll's *Alice in Wonderland*, Melville's *Moby Dick*, Austen's *Emma*, Milton's *Paradise Lost*, Shakespeare's *Hamlet*) are missing, it downloads only the missing files via NLTK Gutenberg.
+### 1. Corpora Download & Empty Directory Handling
+By default, automatic download of corpus files is **disabled**.
+
+If the specified `--corpus-dir` is empty or does not contain any plain text files (`*.txt`) to train embeddings, `w2v` will:
+1. Log an error that no text files (`*.txt`) were found in the folder.
+2. Suggest that benchmark text corpora can be downloaded automatically using `--sync-corpora`.
+3. Provide the exact equivalent command line example to run.
+
+#### Enabling Automatic Download
+To automatically download standard benchmark literary texts from NLTK Gutenberg:
+- **CLI**: Pass `--sync-corpora`
+  ```bash
+  w2v --corpus-dir ./corpuses --sync-corpora
+  ```
+- **Python**: Pass `sync_corpora_hook=True` (or `download=True` on Dataset classes)
+  ```python
+  sg = SkipGram(corpus_dir="./corpuses", sync_corpora_hook=True)
+  ```
 
 Existing local files (such as `portrait_of_dorian_gray.txt`) are **never overwritten or removed**.
-
-#### Disabling Automatic Download
-If you work offline or wish to use exclusively your own files:
-- **CLI**: Pass `--no-sync-corpora`
-  ```bash
-  w2v --corpus-dir ./my_texts --no-sync-corpora
-  ```
-- **Python**: Pass `sync_corpora_hook=False`
-  ```python
-  w2v = Word2Vec(corpus_dir="./my_texts", sync_corpora_hook=False)
-  ```
 
 ### 2. Using Custom Text Corpora
 To train on your own domain-specific documents:
 1. Place any plain UTF-8 text files (`*.txt`) inside your folder (e.g. `./my_data/book1.txt`, `./my_data/book2.txt`).
-2. Point `corpus_dir` to that folder:
+2. Point `corpus_dir` to that folder (download is disabled by default):
    ```bash
-   w2v --corpus-dir ./my_data --no-sync-corpora --output-dir ./my_embeddings
+   w2v --corpus-dir ./my_data --output-dir ./my_embeddings
    ```
 
 ### 3. Document Boundary Protection

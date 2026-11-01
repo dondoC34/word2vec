@@ -123,8 +123,14 @@ def test_invalid_inputs_raise_errors(tmp_path: Path) -> None:
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    with pytest.raises(ValueError):
-        SkipGramDataset(corpus_dir=empty_dir, download=False)
+    with pytest.raises(ValueError, match="does not contain any text files"):
+        SkipGramDataset(corpus_dir=empty_dir)
+
+    dir_without_txt = tmp_path / "no_txt"
+    dir_without_txt.mkdir()
+    (dir_without_txt / "sample.bin").write_bytes(b"\x00\x01\x02")
+    with pytest.raises(ValueError, match="does not contain any text files"):
+        BoWDataset(corpus_dir=dir_without_txt)
 
 
 def test_downloader_target_corpora(tmp_path: Path) -> None:

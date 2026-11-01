@@ -102,7 +102,7 @@ class BaseWord2Vec(ABC):
         min_count: int = 2,
         tied_weights: bool = True,
         max_tokens: int | None = None,
-        sync_corpora_hook: bool = True,
+        sync_corpora_hook: bool = False,
         device: str | torch.device | None = None,
         tokenizer: BaseTokenizer | None = None,
         log_dir: str | Path = "./logs",
@@ -212,11 +212,21 @@ class BaseWord2Vec(ABC):
 
         txt_files = sorted(list(corpus_path.glob("*.txt")))
         if not txt_files:
-            txt_files = [f for f in sorted(list(corpus_path.iterdir())) if f.is_file()]
-
-        if not txt_files:
-            self.logger.error("No text files found in corpus directory: '%s'", corpus_dir)
-            raise ValueError(f"No text files found in corpus directory: {corpus_dir}")
+            self.logger.error(
+                "Corpus directory '%s' does not contain any text files (*.txt) to train embeddings.",
+                corpus_dir,
+            )
+            self.logger.info(
+                "Automatic download of corpora is disabled by default. "
+                "You can automatically download sample text files using the '--sync-corpora' parameter "
+                "(or pass 'sync_corpora_hook=True' / 'download=True' in Python)."
+            )
+            self.logger.info('Example command:\n  w2v --corpus-dir "%s" --sync-corpora', corpus_dir)
+            raise ValueError(
+                f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings. "
+                f"Enable automatic download using '--sync-corpora' (or pass sync_corpora_hook=True). "
+                f'Example command: w2v --corpus-dir "{corpus_dir}" --sync-corpora'
+            )
 
         self.corpus_files = [str(f) for f in txt_files]
         self.documents = []
