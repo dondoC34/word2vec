@@ -94,7 +94,7 @@ def test_skipgram_training_and_inference(tmp_path: Path) -> None:
     # Default timestamped filename and no-overwrite behavior
     p_default1 = sg.save_embeddings(output_dir=tmp_path)
     assert p_default1.exists()
-    assert "word2vec_embeddings_" in p_default1.name
+    assert "w2v_skipgram_embeddings_" in p_default1.name
     p_default2 = sg.save_embeddings(output_dir=tmp_path)
     assert p_default2.exists()
     assert p_default1 != p_default2

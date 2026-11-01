@@ -36,7 +36,11 @@ class W2VArgumentParser(argparse.ArgumentParser):
             ("--batch-size", "512", "Mini-batch size for DataLoader."),
             ("--lr", "0.005", "Learning rate for Adam optimizer."),
             ("--output-dir", "./embeddings", "Output directory (created automatically if missing)."),
-            ("--output-filename", "None", "Custom output filename (e.g. custom.txt)."),
+            (
+                "--output-filename",
+                "None",
+                "Custom output filename (defaults to w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt).",
+            ),
             ("--format", "word2vec", "Embedding export format (word2vec, glove, numpy, pt)."),
             ("--device", "None", "Compute device ('cuda', 'cpu', or auto-detected if None)."),
             ("--mlflow / --no-mlflow", "True", "Automatic MLflow experiment tracking (SQLite backend)."),
@@ -171,7 +175,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-filename",
         type=str,
         default=None,
-        help="Custom output filename (e.g. custom.txt).",
+        help="Custom output filename (defaults to w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt).",
     )
     parser.add_argument(
         "--format",

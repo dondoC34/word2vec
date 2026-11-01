@@ -89,7 +89,8 @@ class BaseWord2Vec(ABC):
     """
 
     _logger_name: str = "BaseWord2Vec"
-    _default_export_filename: str = "word2vec_embeddings.txt"
+    _model_name: str = "word2vec"
+    _default_export_filename: str = "w2v_word2vec_embeddings.txt"
 
     def __init__(
         self,
@@ -518,22 +519,23 @@ class BaseWord2Vec(ABC):
     def _resolve_export_filename(
         self,
         filename: str | None,
-        default_base: str,
         ext: str,
         dest: Path,
     ) -> str:
         """
         Resolves the export filename for embeddings.
         If an explicit filename is provided, it is returned unmodified.
-        Otherwise, a timestamp in format YYYYddmm_HHMM is appended before the extension
-        (e.g. 'word2vec_embeddings_20260111_2135.txt') to prevent overwriting previous runs.
+        Otherwise, generates a filename matching:
+          w2v_{model name}_embeddings_YYYYmmdd_hh_MM{ext}
+        (e.g. 'w2v_skipgram_embeddings_20261101_21_38.txt')
         If a file with the same timestamp already exists, an incremental counter is appended.
         """
         if filename is not None:
             return filename
 
-        timestamp = datetime.now().strftime("%Y%d%m_%H%M")
-        base_name = f"{default_base}_{timestamp}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H_%M")
+        model_name = getattr(self, "_model_name", "word2vec").lower()
+        base_name = f"w2v_{model_name}_embeddings_{timestamp}"
         candidate = f"{base_name}{ext}"
         if (dest / candidate).exists():
             counter = 1
@@ -551,8 +553,9 @@ class BaseWord2Vec(ABC):
         """
         Saves the learned word embeddings to the specified directory.
         If the destination directory does not exist, it is created automatically.
-        If filename is None, a timestamp (YYYYddmm_HHMM) is embedded into the filename
-        to prevent new executions from overwriting previous embeddings.
+        If filename is None, a timestamped filename with signature
+        w2v_{model name}_embeddings_YYYYmmdd_hh_MM{ext} is used to prevent new
+        executions from overwriting previous embeddings.
         """
         if self.model is None or self.dataset is None:
             self.logger.error("Cannot save embeddings: model or dataset is not initialized.")
@@ -569,10 +572,9 @@ class BaseWord2Vec(ABC):
         embeddings_matrix = self._get_embedding_weights().cpu().numpy()
         vocab_size, embedding_dim = embeddings_matrix.shape
         fmt = format.lower()
-        default_base = Path(self._default_export_filename).stem
 
         if fmt in ("word2vec", "txt", "vec"):
-            out_filename = self._resolve_export_filename(filename, default_base, ".txt", dest)
+            out_filename = self._resolve_export_filename(filename, ".txt", dest)
             filepath = dest / out_filename
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(f"{vocab_size} {embedding_dim}\n")
@@ -580,14 +582,14 @@ class BaseWord2Vec(ABC):
                     vec_str = " ".join(f"{val:.6f}" for val in vec)
                     f.write(f"{word} {vec_str}\n")
         elif fmt == "glove":
-            out_filename = self._resolve_export_filename(filename, "glove_embeddings", ".txt", dest)
+            out_filename = self._resolve_export_filename(filename, ".txt", dest)
             filepath = dest / out_filename
             with open(filepath, "w", encoding="utf-8") as f:
                 for word, vec in zip(itos, embeddings_matrix):
                     vec_str = " ".join(f"{val:.6f}" for val in vec)
                     f.write(f"{word} {vec_str}\n")
         elif fmt in ("numpy", "npz"):
-            out_filename = self._resolve_export_filename(filename, default_base, ".npz", dest)
+            out_filename = self._resolve_export_filename(filename, ".npz", dest)
             filepath = dest / out_filename
             np.savez_compressed(
                 filepath,
@@ -595,7 +597,7 @@ class BaseWord2Vec(ABC):
                 vectors=embeddings_matrix.astype(np.float32),
             )
         elif fmt == "pt":
-            out_filename = self._resolve_export_filename(filename, default_base, ".pt", dest)
+            out_filename = self._resolve_export_filename(filename, ".pt", dest)
             filepath = dest / out_filename
             torch.save(
                 {

@@ -113,7 +113,7 @@ Run `w2v --help` at any time to display the parameter table:
 | `--batch-size` | `512` | Mini-batch size for DataLoader. |
 | `--lr` | `0.005` | Learning rate for Adam optimizer. |
 | `--output-dir` | `./embeddings` | Output directory (created automatically if missing). |
-| `--output-filename` | `None` | Custom output filename (defaults to timestamped `word2vec_embeddings_YYYYddmm_HHMM.txt`). |
+| `--output-filename` | `None` | Custom output filename (defaults to timestamped `w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt`). |
 | `--format` | `word2vec` | Embedding export format (`word2vec`, `glove`, `numpy`, `pt`). |
 | `--device` | `None` | Compute device (`cuda` or `cpu`, auto-detected if None). |
 | `--log-dir` | `./logs` | Directory where timestamped execution log files are stored. |

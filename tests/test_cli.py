@@ -56,7 +56,7 @@ def test_cli_main_skipgram(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    saved = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    saved = list(out_dir.glob("w2v_skipgram_embeddings_*.txt"))
     assert len(saved) == 1
     assert saved[0].exists()
 
@@ -93,7 +93,7 @@ def test_cli_main_bow(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    saved = list(out_dir.glob("bow_embeddings_*.txt"))
+    saved = list(out_dir.glob("w2v_bow_embeddings_*.txt"))
     assert len(saved) == 1
     assert saved[0].exists()
 
@@ -157,7 +157,7 @@ def test_cli_main_no_mlflow(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    saved = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    saved = list(out_dir.glob("w2v_skipgram_embeddings_*.txt"))
     assert len(saved) == 1
     assert saved[0].exists()
 
@@ -253,7 +253,7 @@ def test_cli_main_custom_filename_and_no_overwrite(tmp_path: Path) -> None:
     )
     assert ret2 == 0
 
-    default_files = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    default_files = list(out_dir.glob("w2v_skipgram_embeddings_*.txt"))
     assert len(default_files) == 2
 
 

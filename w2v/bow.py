@@ -124,7 +124,8 @@ class BoW(BaseWord2Vec):
     """
 
     _logger_name: str = "BoW"
-    _default_export_filename: str = "bow_embeddings.txt"
+    _model_name: str = "bow"
+    _default_export_filename: str = "w2v_bow_embeddings.txt"
 
     def _create_dataset(self) -> BoWDataset:
         return BoWDataset(
