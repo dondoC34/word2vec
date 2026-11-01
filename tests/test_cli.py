@@ -15,6 +15,9 @@ def test_w2v_argument_parser_format_help() -> None:
 
 def test_create_parser() -> None:
     parser = create_parser()
+    args_default = parser.parse_args([])
+    assert args_default.sync_corpora is False
+
     args = parser.parse_args(["--model", "cbow", "--embedding-dim", "64", "--epochs", "2"])
     assert args.model == "cbow"
     assert args.embedding_dim == 64
@@ -94,6 +97,26 @@ def test_cli_main_bow(tmp_path: Path) -> None:
 def test_cli_main_error_handling() -> None:
     # Invalid directory raises FileNotFoundError in pipeline, caught by main returning 1
     ret = main(["--corpus-dir", "/path/that/definitely/does/not/exist/12345", "--no-sync-corpora"])
+    assert ret == 1
+
+
+def test_cli_main_empty_corpus_dir(tmp_path: Path) -> None:
+    empty_dir = tmp_path / "empty_corpus"
+    empty_dir.mkdir()
+    log_dir = tmp_path / "logs"
+
+    ret = main(["--corpus-dir", str(empty_dir), "--log-dir", str(log_dir), "--no-mlflow"])
+    assert ret == 1
+
+
+def test_cli_main_dir_without_txt_files(tmp_path: Path) -> None:
+    dir_without_txt = tmp_path / "no_txt_corpus"
+    dir_without_txt.mkdir()
+    (dir_without_txt / "image.png").write_bytes(b"\x89PNG")
+    (dir_without_txt / "data.csv").write_text("a,b,c", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+
+    ret = main(["--corpus-dir", str(dir_without_txt), "--log-dir", str(log_dir), "--no-mlflow"])
     assert ret == 1
 
 
