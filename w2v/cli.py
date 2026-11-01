@@ -5,10 +5,12 @@ Built using Python's standard library `argparse`.
 
 import argparse
 import logging
+import subprocess
 import sys
 
 from w2v.bow import BoW
 from w2v.skipgram import SkipGram, setup_logging
+from w2v.tracking import load_mlflow_config
 
 logger = logging.getLogger("CLI")
 
@@ -37,6 +39,8 @@ class W2VArgumentParser(argparse.ArgumentParser):
             ("--output-filename", "None", "Custom output filename (e.g. custom.txt)."),
             ("--format", "word2vec", "Embedding export format (word2vec, glove, numpy, pt)."),
             ("--device", "None", "Compute device ('cuda', 'cpu', or auto-detected if None)."),
+            ("--mlflow / --no-mlflow", "True", "Automatic MLflow experiment tracking (SQLite backend)."),
+            ("--mlflow-config", "None", "Optional custom path to mlflow-config.yml."),
             ("--log-dir", "./logs", "Directory where execution log files are stored."),
             ("--log-level", "INFO", "Logging severity threshold (DEBUG, INFO, WARNING, ERROR)."),
             ("-h, --help", "", "Show this help message with parameters table and exit."),
@@ -177,6 +181,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="Embedding export format (word2vec, glove, numpy, pt).",
     )
 
+    # MLflow Tracking Options
+    parser.add_argument(
+        "--mlflow",
+        dest="mlflow",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatic MLflow experiment tracking (default: True).",
+    )
+    parser.add_argument(
+        "--mlflow-config",
+        type=str,
+        default=None,
+        help="Optional custom path to mlflow-config.yml.",
+    )
+
     # Logging Options
     parser.add_argument(
         "--log-dir",
@@ -195,7 +214,114 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def start_mlflow_server(
+    host: str = "127.0.0.1",
+    port: int = 5000,
+    backend_store_uri: str = "sqlite:///mlflow.db",
+    default_artifact_root: str = "./mlartifacts",
+) -> int:
+    """
+    Launches the MLflow tracking server and web UI as a subprocess.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "mlflow",
+        "server",
+        "--host",
+        str(host),
+        "--port",
+        str(port),
+        "--backend-store-uri",
+        str(backend_store_uri),
+        "--default-artifact-root",
+        str(default_artifact_root),
+    ]
+    logger.info("=" * 70)
+    logger.info("Starting MLflow Server...")
+    logger.info("Backend SQLite URI: %s", backend_store_uri)
+    logger.info("Default Artifact Root: %s", default_artifact_root)
+    logger.info("MLflow Web Dashboard: http://%s:%s", host, port)
+    logger.info("=" * 70)
+    print(f"\n[w2v] MLflow UI running at: http://{host}:{port}")
+    print("[w2v] Press Ctrl+C to terminate the server.\n")
+    try:
+        return subprocess.call(cmd)
+    except KeyboardInterrupt:
+        logger.info("MLflow server stopped by user.")
+        return 0
+
+
+def handle_mlflow_cli(args: list[str]) -> int:
+    """
+    Subcommand controller for 'w2v mlflow' commands.
+    """
+    mlflow_parser = argparse.ArgumentParser(
+        prog="w2v mlflow",
+        description="MLflow server management for Word2Vec experiments.",
+    )
+    subparsers = mlflow_parser.add_subparsers(dest="subcommand", required=True)
+
+    start_parser = subparsers.add_parser(
+        "start",
+        help="Start the MLflow tracking server and web dashboard.",
+    )
+    start_parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=None,
+        help="Path to YAML configuration file (defaults to mlflow-config.yml).",
+    )
+    start_parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Host IP address to bind to (overrides config).",
+    )
+    start_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port number to bind to (overrides config).",
+    )
+    start_parser.add_argument(
+        "--backend-store-uri",
+        type=str,
+        default=None,
+        help="Storage database URI (e.g. sqlite:///mlflow.db, overrides config).",
+    )
+    start_parser.add_argument(
+        "--default-artifact-root",
+        type=str,
+        default=None,
+        help="Directory where artifacts are stored (overrides config).",
+    )
+
+    parsed = mlflow_parser.parse_args(args)
+    if parsed.subcommand == "start":
+        cfg = load_mlflow_config(parsed.config)
+        server_cfg = cfg.get("server", {})
+        host = parsed.host or server_cfg.get("host", "127.0.0.1")
+        port = parsed.port or server_cfg.get("port", 5000)
+        backend_store_uri = parsed.backend_store_uri or server_cfg.get("backend_store_uri", "sqlite:///mlflow.db")
+        default_artifact_root = parsed.default_artifact_root or server_cfg.get("default_artifact_root", "./mlartifacts")
+
+        return start_mlflow_server(
+            host=host,
+            port=port,
+            backend_store_uri=backend_store_uri,
+            default_artifact_root=default_artifact_root,
+        )
+
+    return 0
+
+
 def main(args: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if args is None else args)
+    if raw_args and raw_args[0] == "mlflow":
+        return handle_mlflow_cli(raw_args[1:])
+
     parser = create_parser()
     parsed_args = parser.parse_args(args)
 
@@ -245,6 +371,8 @@ def main(args: list[str] | None = None) -> int:
             sync_corpora_hook=parsed_args.sync_corpora,
             device=parsed_args.device,
             log_dir=parsed_args.log_dir,
+            enable_mlflow=parsed_args.mlflow,
+            mlflow_config=parsed_args.mlflow_config,
         )
 
         # Train model
@@ -258,6 +386,8 @@ def main(args: list[str] | None = None) -> int:
             epochs=parsed_args.epochs,
             batch_size=parsed_args.batch_size,
             lr=parsed_args.lr,
+            enable_mlflow=parsed_args.mlflow,
+            mlflow_config=parsed_args.mlflow_config,
         )
         logger.info("Training complete. Final loss: %.4f", history[-1] if history else 0.0)
 

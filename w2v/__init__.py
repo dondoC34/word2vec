@@ -12,6 +12,7 @@ from w2v.data.dataset import BaseWord2VecDataset, BoWDataset, CBOWDataset, SkipG
 from w2v.data.downloader import ensure_nltk_gutenberg_corpora
 from w2v.preprocessing.tokenizer import BaseTokenizer, BasicTokenizer
 from w2v.skipgram import PairScalarModel, SkipGram, SkipGramModel, Word2Vec, get_model, setup_logging
+from w2v.tracking import MLflowTracker, load_mlflow_config
 
 __version__ = "0.1.0"
 
@@ -26,6 +27,7 @@ __all__ = [
     "BoWModel",
     "CBOWDataset",
     "CBOWModel",
+    "MLflowTracker",
     "PairScalarModel",
     "SkipGram",
     "SkipGramDataset",
@@ -35,5 +37,6 @@ __all__ = [
     "create_parser",
     "ensure_nltk_gutenberg_corpora",
     "get_model",
+    "load_mlflow_config",
     "setup_logging",
 ]

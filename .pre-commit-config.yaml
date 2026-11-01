@@ -21,3 +21,4 @@ repos:
       - id: mypy
         files: ^w2v/
         args: [--config-file=pyproject.toml]
+        additional_dependencies: ["types-PyYAML"]

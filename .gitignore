@@ -215,3 +215,9 @@ logs/
 *.log
 embeddings/
 w2v/embeddings/
+
+# MLflow tracking database, runs, and artifacts
+mlflow.db
+*.db
+mlruns/
+mlartifacts/

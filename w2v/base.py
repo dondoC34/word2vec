@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from w2v.data.downloader import ensure_nltk_gutenberg_corpora
 from w2v.preprocessing.tokenizer import BaseTokenizer, BasicTokenizer
+from w2v.tracking import MLflowTracker
 
 
 def setup_logging(
@@ -105,6 +106,8 @@ class BaseWord2Vec(ABC):
         device: str | torch.device | None = None,
         tokenizer: BaseTokenizer | None = None,
         log_dir: str | Path = "./logs",
+        enable_mlflow: bool = True,
+        mlflow_config: str | Path | dict | None = None,
     ):
         if not logging.getLogger().handlers:
             setup_logging(log_dir=log_dir)
@@ -117,6 +120,8 @@ class BaseWord2Vec(ABC):
         self.max_tokens = max_tokens
         self.sync_corpora_hook = sync_corpora_hook
         self.corpus_dir = Path(corpus_dir) if corpus_dir else None
+        self.enable_mlflow = enable_mlflow
+        self.mlflow_config = mlflow_config
 
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -308,9 +313,13 @@ class BaseWord2Vec(ABC):
         batch_size: int = 512,
         lr: float = 0.005,
         num_workers: int = 0,
+        enable_mlflow: bool | None = None,
+        mlflow_config: str | Path | dict | None = None,
+        run_name: str | None = None,
     ) -> list[float]:
         """
         Trains the model over the dataset across the specified number of epochs.
+        Tracks hyperparameters, epoch losses, convergence figures, and model checkpoints in MLflow.
         """
         if self.sync_corpora_hook and self.corpus_dir is not None:
             ensure_nltk_gutenberg_corpora(self.corpus_dir)
@@ -318,6 +327,16 @@ class BaseWord2Vec(ABC):
         if self.model is None or self.dataset is None:
             self.logger.error("Model or dataset is not initialized before calling train().")
             raise ValueError("Model and dataset must be initialized before training.")
+
+        # Resolve MLflow tracking configuration
+        use_mlflow = self.enable_mlflow if enable_mlflow is None else enable_mlflow
+        resolved_config = mlflow_config if mlflow_config is not None else self.mlflow_config
+
+        tracker = MLflowTracker(
+            model_name=self._logger_name,
+            enabled=use_mlflow,
+            config=resolved_config,
+        )
 
         self.model.train()
         collate_fn = getattr(self.dataset, "collate_fn", None)
@@ -330,7 +349,7 @@ class BaseWord2Vec(ABC):
         )
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        history = []
+        history: list[float] = []
         self.logger.info(
             "Beginning %s training: %d epochs, batch_size=%d, lr=%.5f on device '%s'.",
             self._logger_name,
@@ -339,6 +358,35 @@ class BaseWord2Vec(ABC):
             lr,
             self.device,
         )
+
+        if tracker.enabled:
+            # Inform user how to view tracking UI
+            self.logger.info("=" * 70)
+            self.logger.info("MLflow Tracking active (Storage: %s)", tracker.backend_store_uri)
+            self.logger.info("Macro-Experiment: '%s'", tracker.experiment_name)
+            self.logger.info("To monitor metrics and visual plots in real-time, run: 'w2v mlflow start'")
+            self.logger.info("=" * 70)
+
+            # Start active run and log hyperparameters
+            params = {
+                "model_architecture": self._logger_name,
+                "embedding_dim": self.embedding_dim,
+                "window_size": self.window_size,
+                "n_negative": self.n_negative,
+                "min_count": self.min_count,
+                "tied_weights": self.tied_weights,
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "lr": lr,
+                "optimizer": "Adam",
+                "device": str(self.device),
+                "vocab_size": self.vocab_size,
+                "num_documents": len(self.documents),
+                "total_tokens": len(self.tokens),
+                "training_samples": len(self.dataset) if isinstance(self.dataset, Sized) else 0,
+            }
+            tracker.start_run(params=params, run_name=run_name)
+
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
@@ -359,10 +407,31 @@ class BaseWord2Vec(ABC):
                 "Epoch [%d/%d] - Average Loss: %.4f across %d batches.", epoch, epochs, avg_loss, num_batches
             )
 
+            # Log epoch loss to MLflow
+            if tracker.enabled:
+                tracker.log_epoch_loss(epoch, avg_loss)
+
         elapsed = time.time() - start_time
         self.logger.info(
             "Training finished successfully in %.2f seconds (%.2f s/epoch).", elapsed, elapsed / max(epochs, 1)
         )
+        self.history = history
+
+        # Finalize MLflow tracking and log artifacts
+        if tracker.enabled:
+            tracker.log_summary_metrics(history, elapsed)
+            tracker.log_figures(history, self, self.dataset)
+            tracker.log_model_checkpoint(self.model)
+            run_id = tracker.run_id
+            tracker.end_run()
+
+            self.logger.info("=" * 70)
+            self.logger.info("MLflow Run completed (Run ID: %s)", run_id)
+            self.logger.info("To inspect run metrics, loss curves, and embedding figures, launch the UI:")
+            self.logger.info("    w2v mlflow start")
+            self.logger.info("and open your browser at: http://127.0.0.1:5000")
+            self.logger.info("=" * 70)
+
         return history
 
     @property
