@@ -242,3 +242,85 @@ def test_mlflow_tracker_log_corpora(tmp_path: Path) -> None:
         in_mem_data = json.load(f)
     assert in_mem_data["total_files"] == 0
     assert in_mem_data["source"] == "in-memory"
+
+
+def test_mlflow_advanced_features(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_advanced.db"
+    art_dir = tmp_path / "artifacts_advanced"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "TestAdvanced",
+            "autolog_figures": False,
+            "autolog_model": False,
+            "system_metrics": True,
+        },
+    }
+
+    tracker = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id = tracker.start_run(run_name="adv_run")
+    assert run_id is not None
+
+    # 1. Epoch metrics with timing
+    tracker.log_epoch_metrics(epoch=1, loss=4.5, epoch_time_sec=0.25)
+    tracker.log_epoch_metrics(epoch=2, loss=3.2, epoch_time_sec=0.20)
+
+    # 2. Summary metrics with throughput
+    tracker.log_summary_metrics(
+        history=[4.5, 3.2],
+        training_time_sec=0.50,
+        total_tokens=1000,
+        training_samples=500,
+        epochs=2,
+    )
+
+    # 3. Semantic table evaluation
+    mock_model = MagicMock()
+    mock_dataset = MagicMock()
+    mock_dataset.stoi = {"apple": 0, "banana": 1, "cherry": 2}
+    mock_dataset.counts = {"apple": 10, "banana": 8, "cherry": 5}
+    mock_model.dataset = mock_dataset
+    mock_model.most_similar.side_effect = lambda w, top_k=5: [("fruit", 0.88), ("tree", 0.65)]
+
+    tracker.log_semantic_table(mock_model, candidate_words=["apple", "banana"])
+
+    # End run
+    tracker.end_run()
+    assert tracker.run_id is None
+    assert tracker.last_run_id == run_id
+
+    # 4. Post-run artifact logging (e.g. exported embeddings)
+    exported_emb = tmp_path / "w2v_skipgram_embeddings_20261101_2200.txt"
+    exported_emb.write_text("apple 0.1 0.2\nbanana 0.3 0.4\n", encoding="utf-8")
+    tracker.log_artifact(exported_emb, artifact_path="embeddings")
+
+    # Verify artifacts and metrics
+    emb_candidates = list(art_dir.glob("**/embeddings/w2v_skipgram_embeddings_20261101_2200.txt"))
+    assert len(emb_candidates) == 1
+    assert emb_candidates[0].exists()
+
+    table_candidates = list(art_dir.glob("**/evaluations/semantic_neighbors.json"))
+    assert len(table_candidates) == 1
+    assert table_candidates[0].exists()
+
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT key, value FROM metrics WHERE run_uuid = ?", (run_id,))
+    metrics_dict = {row[0]: row[1] for row in cursor.fetchall()}
+    assert "tokens_per_second" in metrics_dict
+    assert "samples_per_second" in metrics_dict
+    assert "epoch_time_seconds" in metrics_dict
+    assert "mean_top1_similarity" in metrics_dict
+    assert metrics_dict["mean_top1_similarity"] == 0.88
+
+    # Verify git tags if present
+    cursor.execute("SELECT key, value FROM tags WHERE run_uuid = ?", (run_id,))
+    tags_dict = {row[0]: row[1] for row in cursor.fetchall()}
+    assert "git_branch" in tags_dict
+    assert "git_commit" in tags_dict
+
+    conn.close()

@@ -8,3 +8,4 @@ tracking:
   experiment_prefix: "Word2Vec"
   autolog_figures: true
   autolog_model: true
+  system_metrics: true

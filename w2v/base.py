@@ -147,6 +147,7 @@ class BaseWord2Vec(ABC):
         self.dataset: Dataset | None = None
         self.model: nn.Module | None = None
         self.history: list[float] = []
+        self.tracker: MLflowTracker | None = None
 
         if dataset is not None:
             self.set_dataset(dataset, vocab_size=vocab_size)
@@ -348,6 +349,7 @@ class BaseWord2Vec(ABC):
             enabled=use_mlflow,
             config=resolved_config,
         )
+        self.tracker = tracker
 
         self.model.train()
         collate_fn = getattr(self.dataset, "collate_fn", None)
@@ -401,6 +403,7 @@ class BaseWord2Vec(ABC):
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
+            epoch_start = time.time()
             total_loss = 0.0
             num_batches = 0
             for batch in dataloader:
@@ -412,15 +415,21 @@ class BaseWord2Vec(ABC):
                 total_loss += loss.item()
                 num_batches += 1
 
+            epoch_time = time.time() - epoch_start
             avg_loss = total_loss / max(num_batches, 1)
             history.append(avg_loss)
             self.logger.info(
-                "Epoch [%d/%d] - Average Loss: %.4f across %d batches.", epoch, epochs, avg_loss, num_batches
+                "Epoch [%d/%d] - Average Loss: %.4f across %d batches (%.2fs).",
+                epoch,
+                epochs,
+                avg_loss,
+                num_batches,
+                epoch_time,
             )
 
-            # Log epoch loss to MLflow
+            # Log epoch metrics to MLflow
             if tracker.enabled:
-                tracker.log_epoch_loss(epoch, avg_loss)
+                tracker.log_epoch_metrics(epoch=epoch, loss=avg_loss, epoch_time_sec=epoch_time)
 
         elapsed = time.time() - start_time
         self.logger.info(
@@ -430,8 +439,15 @@ class BaseWord2Vec(ABC):
 
         # Finalize MLflow tracking and log artifacts
         if tracker.enabled:
-            tracker.log_summary_metrics(history, elapsed)
+            tracker.log_summary_metrics(
+                history=history,
+                training_time_sec=elapsed,
+                total_tokens=len(self.tokens),
+                training_samples=len(self.dataset) if isinstance(self.dataset, Sized) else 0,
+                epochs=epochs,
+            )
             tracker.log_figures(history, self, self.dataset)
+            tracker.log_semantic_table(self)
             corpus_files_to_log: list[str | Path] = list(self.corpus_files or getattr(self.dataset, "corpus_files", []))
             tracker.log_corpora(corpus_files_to_log, self.documents)
             tracker.log_model_checkpoint(self.model)
@@ -620,4 +636,9 @@ class BaseWord2Vec(ABC):
             embedding_dim,
             fmt,
         )
+
+        # Log exported embeddings artifact to MLflow run if tracking was enabled
+        if self.tracker is not None and self.tracker.enabled:
+            self.tracker.log_artifact(filepath, artifact_path="embeddings")
+
         return filepath

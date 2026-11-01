@@ -13,6 +13,7 @@ dependencies = [
     "nltk>=3.9.2",
     "pandas>=2.3.3",
     "plotly>=7.1.0",
+    "psutil>=5.9.0",
     "pyarrow>=22.0.0",
     "pyyaml>=6.0.3",
     "regex>=2025.11.3",

@@ -37,6 +37,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "experiment_prefix": "Word2Vec",
         "autolog_figures": True,
         "autolog_model": True,
+        "system_metrics": True,
     },
 }
 
@@ -304,6 +305,8 @@ class MLflowTracker:
         )
         self.autolog_figures: bool = self.config.get("tracking", {}).get("autolog_figures", True)
         self.autolog_model: bool = self.config.get("tracking", {}).get("autolog_model", True)
+        self.system_metrics: bool = self.config.get("tracking", {}).get("system_metrics", True)
+        self.last_run_id: str | None = None
 
         # Macro-experiment name: e.g. "Word2Vec-SkipGram" or "Word2Vec-BoW"
         self.experiment_name = f"{self.experiment_prefix}-{self.model_name}"
@@ -328,6 +331,13 @@ class MLflowTracker:
             # Suppress third-party and internal MLflow console warnings
             logging.getLogger("mlflow").setLevel(logging.ERROR)
             warnings.filterwarnings("ignore", module="mlflow")
+
+            # Enable system metrics logging if configured
+            if self.system_metrics:
+                try:
+                    mlflow.enable_system_metrics_logging()
+                except Exception as e:
+                    logger.debug("Failed enabling system metrics logging: %s", e)
 
             # Configure SQLite backend storage URI
             mlflow.set_tracking_uri(self.backend_store_uri)
@@ -363,6 +373,20 @@ class MLflowTracker:
                 "model_architecture": self.model_name,
                 "framework": "PyTorch",
             }
+            try:
+                import subprocess
+
+                git_commit = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ).strip()
+                git_branch = subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ).strip()
+                run_tags["git_commit"] = git_commit
+                run_tags["git_branch"] = git_branch
+            except Exception:
+                pass
+
             if tags:
                 run_tags.update(tags)
             mlflow.set_tags(run_tags)
@@ -393,19 +417,32 @@ class MLflowTracker:
             self.enabled = False
             return None
 
-    def log_epoch_loss(self, epoch: int, loss: float) -> None:
-        """Logs the average training loss for a specific epoch."""
+    def log_epoch_metrics(self, epoch: int, loss: float, epoch_time_sec: float | None = None) -> None:
+        """Logs the average training loss and epoch duration for a specific epoch."""
         if not self.enabled or not self.run_id:
             return
         try:
             import mlflow
 
             mlflow.log_metric("loss", loss, step=epoch)
+            if epoch_time_sec is not None:
+                mlflow.log_metric("epoch_time_seconds", round(epoch_time_sec, 4), step=epoch)
         except Exception as e:
-            logger.debug("Failed logging epoch metric to MLflow: %s", e)
+            logger.debug("Failed logging epoch metrics to MLflow: %s", e)
 
-    def log_summary_metrics(self, history: list[float], training_time_sec: float) -> None:
-        """Logs end-of-training summary metrics (final loss, best loss, total elapsed time)."""
+    def log_epoch_loss(self, epoch: int, loss: float) -> None:
+        """Logs the average training loss for a specific epoch (backwards compatibility)."""
+        self.log_epoch_metrics(epoch=epoch, loss=loss)
+
+    def log_summary_metrics(
+        self,
+        history: list[float],
+        training_time_sec: float,
+        total_tokens: int = 0,
+        training_samples: int = 0,
+        epochs: int = 1,
+    ) -> None:
+        """Logs end-of-training summary metrics (final loss, best loss, total elapsed time, throughput)."""
         if not self.enabled or not self.run_id:
             return
         try:
@@ -415,6 +452,17 @@ class MLflowTracker:
                 mlflow.log_metric("final_loss", history[-1])
                 mlflow.log_metric("best_loss", min(history))
             mlflow.log_metric("training_time_seconds", training_time_sec)
+            mlflow.log_metric("avg_epoch_time_seconds", training_time_sec / max(epochs, 1))
+
+            if total_tokens > 0:
+                total_tokens_processed = total_tokens * epochs
+                tokens_per_sec = total_tokens_processed / max(training_time_sec, 0.001)
+                mlflow.log_metric("tokens_per_second", round(tokens_per_sec, 2))
+
+            if training_samples > 0:
+                total_samples_processed = training_samples * epochs
+                samples_per_sec = total_samples_processed / max(training_time_sec, 0.001)
+                mlflow.log_metric("samples_per_second", round(samples_per_sec, 2))
         except Exception as e:
             logger.debug("Failed logging summary metrics to MLflow: %s", e)
 
@@ -575,17 +623,119 @@ class MLflowTracker:
         except Exception as e:
             logger.warning("Failed logging corpora to MLflow: %s", e)
 
-    def log_artifact(self, file_path: str | Path, artifact_path: str | None = None) -> None:
-        """Logs an arbitrary file (e.g. exported embeddings .txt) as an MLflow artifact."""
+    def log_semantic_table(
+        self,
+        model_instance: Any,
+        candidate_words: list[str] | None = None,
+        top_k: int = 5,
+        artifact_file: str = "evaluations/semantic_neighbors.json",
+    ) -> None:
+        """
+        Evaluates nearest neighbors for representative vocabulary words and logs the
+        results as an interactive table artifact (mlflow.log_table). Also logs summary
+        metrics (mean_top1_similarity).
+        """
         if not self.enabled or not self.run_id:
             return
+
+        try:
+            import mlflow
+            import pandas as pd
+
+            dataset = getattr(model_instance, "dataset", None)
+            stoi = getattr(dataset, "stoi", {}) if dataset else {}
+            if not stoi or not hasattr(model_instance, "most_similar"):
+                return
+
+            if candidate_words is None:
+                candidate_words = [
+                    "dorian",
+                    "gray",
+                    "lord",
+                    "henry",
+                    "alice",
+                    "rabbit",
+                    "queen",
+                    "hatter",
+                    "sea",
+                    "ship",
+                    "captain",
+                    "ahab",
+                    "hamlet",
+                    "king",
+                    "macbeth",
+                    "ghost",
+                    "time",
+                    "world",
+                    "man",
+                    "life",
+                    "art",
+                ]
+
+            target_words = [w for w in candidate_words if w in stoi]
+            if len(target_words) < 3:
+                sorted_vocab = sorted(stoi.keys(), key=lambda w: getattr(dataset, "counts", {}).get(w, 0), reverse=True)
+                target_words = sorted_vocab[:10]
+
+            rows: list[dict[str, Any]] = []
+            top1_sims: list[float] = []
+
+            for word in target_words:
+                sims = model_instance.most_similar(word, top_k=top_k)
+                for rank, (neighbor, score) in enumerate(sims, start=1):
+                    rows.append(
+                        {
+                            "target_word": word,
+                            "rank": rank,
+                            "neighbor": neighbor,
+                            "cosine_similarity": round(float(score), 4),
+                        }
+                    )
+                    if rank == 1:
+                        top1_sims.append(float(score))
+
+            if rows:
+                df = pd.DataFrame(rows)
+                mlflow.log_table(data=df, artifact_file=artifact_file)
+                if top1_sims:
+                    mlflow.log_metric("mean_top1_similarity", float(np.mean(top1_sims)))
+                logger.info(
+                    "Logged semantic evaluation table (%d rows across %d words) to MLflow artifact '%s'.",
+                    len(rows),
+                    len(target_words),
+                    artifact_file,
+                )
+        except Exception as e:
+            logger.warning("Failed logging semantic table to MLflow: %s", e)
+
+    def log_artifact(
+        self,
+        file_path: str | Path,
+        artifact_path: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        """Logs an arbitrary file (e.g. exported embeddings .txt) as an MLflow artifact."""
+        if not self.enabled:
+            return
+        target_run_id = run_id or self.run_id or self.last_run_id
+        if not target_run_id:
+            return
+
         try:
             import mlflow
 
             p = Path(file_path)
-            if p.exists():
+            if not p.exists():
+                logger.warning("Artifact file not found: %s", file_path)
+                return
+
+            if self.run_id and target_run_id == self.run_id:
                 mlflow.log_artifact(str(p), artifact_path=artifact_path)
-                logger.info("Logged artifact '%s' to MLflow.", p.name)
+            else:
+                client = mlflow.MlflowClient(self.backend_store_uri)
+                client.log_artifact(target_run_id, str(p), artifact_path=artifact_path)
+
+            logger.info("Logged artifact '%s' to MLflow (run %s).", p.name, target_run_id)
         except Exception as e:
             logger.warning("Failed logging artifact '%s' to MLflow: %s", file_path, e)
 
@@ -601,4 +751,5 @@ class MLflowTracker:
         except Exception as e:
             logger.debug("Failed ending MLflow run: %s", e)
         finally:
+            self.last_run_id = self.run_id
             self.run_id = None
