@@ -432,6 +432,8 @@ class BaseWord2Vec(ABC):
         if tracker.enabled:
             tracker.log_summary_metrics(history, elapsed)
             tracker.log_figures(history, self, self.dataset)
+            corpus_files_to_log: list[str | Path] = list(self.corpus_files or getattr(self.dataset, "corpus_files", []))
+            tracker.log_corpora(corpus_files_to_log, self.documents)
             tracker.log_model_checkpoint(self.model)
             run_id = tracker.run_id
             tracker.end_run()

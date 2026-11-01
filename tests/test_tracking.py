@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -154,3 +155,90 @@ def test_mlflow_tracker_sqlite_lifecycle(tmp_path: Path) -> None:
     assert 2 in loss_steps
 
     conn.close()
+
+
+def test_mlflow_tracker_log_corpora(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_corpora.db"
+    art_dir = tmp_path / "artifacts"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "TestCorpora",
+            "autolog_figures": False,
+            "autolog_model": False,
+        },
+    }
+
+    # Case 1: Standard corpora logging with content (below 50MB threshold)
+    c1 = tmp_path / "book1.txt"
+    c1.write_text("the quick brown fox jumps over the lazy dog", encoding="utf-8")
+    c2 = tmp_path / "book2.txt"
+    c2.write_text("alice was beginning to get very tired of sitting by her sister", encoding="utf-8")
+
+    tracker = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id = tracker.start_run(run_name="corpora_run")
+    assert run_id is not None
+
+    tracker.log_corpora(
+        corpus_files=[c1, c2],
+        documents=[["the", "quick", "fox"], ["alice", "sister"]],
+        max_content_size_bytes=50 * 1024 * 1024,
+    )
+    tracker.end_run()
+
+    # Verify artifacts on disk
+    manifest_candidates = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates) == 1
+    manifest_path = manifest_candidates[0]
+    assert manifest_path.exists()
+
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest_data = json.load(f)
+    assert manifest_data["total_files"] == 2
+    assert manifest_data["content_logged"] is True
+    assert len(manifest_data["files"]) == 2
+    assert manifest_data["files"][0]["filename"] == "book1.txt"
+    assert "sha256" in manifest_data["files"][0]
+
+    # Verify actual .txt files copied
+    corpora_dir = manifest_path.parent
+    assert (corpora_dir / "book1.txt").exists()
+    assert (corpora_dir / "book2.txt").exists()
+
+    # Case 2: Corpora size exceeds threshold (only manifest, no file copy)
+    tracker2 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id2 = tracker2.start_run(run_name="corpora_exceed_threshold")
+    assert run_id2 is not None
+
+    tracker2.log_corpora(
+        corpus_files=[c1, c2],
+        max_content_size_bytes=10,  # 10 bytes threshold is smaller than the files
+    )
+    tracker2.end_run()
+
+    manifest_candidates2 = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates2) == 2
+    # Find the newer manifest
+    new_manifest_path = next(m for m in manifest_candidates2 if str(m) != str(manifest_path))
+    with open(new_manifest_path, encoding="utf-8") as f:
+        manifest_data2 = json.load(f)
+    assert manifest_data2["content_logged"] is False
+    # Verify .txt files were NOT copied into this run's corpora artifact dir
+    assert not (new_manifest_path.parent / "book1.txt").exists()
+
+    # Case 3: In-memory dataset (empty corpus files list)
+    tracker3 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    tracker3.start_run(run_name="corpora_in_memory")
+    tracker3.log_corpora(corpus_files=[])
+    tracker3.end_run()
+
+    manifest_candidates3 = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates3) == 3
+    in_mem_manifest = next(m for m in manifest_candidates3 if m not in (manifest_path, new_manifest_path))
+    with open(in_mem_manifest, encoding="utf-8") as f:
+        in_mem_data = json.load(f)
+    assert in_mem_data["total_files"] == 0
+    assert in_mem_data["source"] == "in-memory"

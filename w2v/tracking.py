@@ -465,6 +465,116 @@ class MLflowTracker:
         except Exception as e:
             logger.warning("Failed logging PyTorch model to MLflow: %s", e)
 
+    def log_corpora(
+        self,
+        corpus_files: list[str | Path],
+        documents: list[list[str]] | None = None,
+        max_content_size_bytes: int = 50 * 1024 * 1024,
+    ) -> None:
+        """
+        Logs training corpora metadata (manifest) and text files as MLflow artifacts.
+        If the combined file size of all corpora exceeds `max_content_size_bytes` (50MB by default),
+        only the structured manifest JSON is logged to avoid saturating storage.
+        """
+        if not self.enabled or not self.run_id:
+            return
+
+        try:
+            import hashlib
+
+            import mlflow
+
+            valid_paths: list[Path] = []
+            for f in corpus_files:
+                p = Path(f)
+                if p.exists() and p.is_file():
+                    valid_paths.append(p.resolve())
+
+            if not valid_paths:
+                manifest = {
+                    "total_files": 0,
+                    "total_size_bytes": 0,
+                    "content_logged": False,
+                    "source": "in-memory",
+                    "files": [],
+                }
+                mlflow.log_dict(manifest, "corpora/corpora_manifest.json")
+                mlflow.set_tags(
+                    {
+                        "corpora_count": "0",
+                        "corpora_files": "in-memory",
+                        "corpora_content_logged": "False",
+                    }
+                )
+                return
+
+            total_size_bytes = sum(p.stat().st_size for p in valid_paths)
+            log_content = total_size_bytes <= max_content_size_bytes
+
+            doc_token_counts: list[int] = []
+            if documents:
+                doc_token_counts = [len(doc) for doc in documents]
+
+            file_entries: list[dict[str, Any]] = []
+            for idx, p in enumerate(valid_paths):
+                sha256 = hashlib.sha256()
+                with open(p, "rb") as fp:
+                    for chunk in iter(lambda: fp.read(65536), b""):
+                        sha256.update(chunk)
+                file_hash = sha256.hexdigest()
+
+                entry: dict[str, Any] = {
+                    "filename": p.name,
+                    "original_path": str(p),
+                    "size_bytes": p.stat().st_size,
+                    "sha256": file_hash,
+                }
+                if idx < len(doc_token_counts):
+                    entry["token_count"] = doc_token_counts[idx]
+                file_entries.append(entry)
+
+            manifest_data: dict[str, Any] = {
+                "total_files": len(valid_paths),
+                "total_size_bytes": total_size_bytes,
+                "content_logged": log_content,
+                "max_content_size_threshold_bytes": max_content_size_bytes,
+                "files": file_entries,
+            }
+
+            mlflow.log_dict(manifest_data, "corpora/corpora_manifest.json")
+
+            if log_content:
+                for p in valid_paths:
+                    mlflow.log_artifact(str(p), artifact_path="corpora")
+                logger.info(
+                    "Logged %d corpora file(s) and manifest (total: %.2f MB) to MLflow artifacts ('corpora/').",
+                    len(valid_paths),
+                    total_size_bytes / (1024 * 1024),
+                )
+            else:
+                logger.info(
+                    "Total corpora size (%.2f MB) exceeds threshold (%.2f MB). "
+                    "Logged corpora manifest JSON only to MLflow artifacts ('corpora/corpora_manifest.json').",
+                    total_size_bytes / (1024 * 1024),
+                    max_content_size_bytes / (1024 * 1024),
+                )
+
+            file_names = [p.name for p in valid_paths]
+            summary_names = ", ".join(file_names[:5])
+            if len(file_names) > 5:
+                summary_names += f" (+{len(file_names) - 5} more)"
+
+            mlflow.set_tags(
+                {
+                    "corpora_count": str(len(valid_paths)),
+                    "corpora_files": summary_names,
+                    "corpora_content_logged": str(log_content),
+                }
+            )
+
+        except Exception as e:
+            logger.warning("Failed logging corpora to MLflow: %s", e)
+
     def log_artifact(self, file_path: str | Path, artifact_path: str | None = None) -> None:
         """Logs an arbitrary file (e.g. exported embeddings .txt) as an MLflow artifact."""
         if not self.enabled or not self.run_id:
