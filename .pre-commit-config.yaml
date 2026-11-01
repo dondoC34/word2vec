@@ -19,6 +19,6 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        files: ^w2v/
+        files: ^(w2v|tests)/
         args: [--config-file=pyproject.toml]
         additional_dependencies: ["types-PyYAML"]

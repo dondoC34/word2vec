@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from w2v.cli import W2VArgumentParser, create_parser, main
 
@@ -134,7 +134,7 @@ def test_cli_main_no_mlflow(tmp_path: Path) -> None:
 
 
 @patch("w2v.cli.subprocess.call", return_value=0)
-def test_cli_mlflow_start_mocked(mock_call: patch) -> None:
+def test_cli_mlflow_start_mocked(mock_call: MagicMock) -> None:
     ret = main(["mlflow", "start"])
     assert ret == 0
     assert mock_call.called
@@ -148,7 +148,7 @@ def test_cli_mlflow_start_mocked(mock_call: patch) -> None:
 
 
 @patch("w2v.cli.subprocess.call", return_value=0)
-def test_cli_mlflow_start_custom_config_mocked(mock_call: patch, tmp_path: Path) -> None:
+def test_cli_mlflow_start_custom_config_mocked(mock_call: MagicMock, tmp_path: Path) -> None:
     custom_cfg = tmp_path / "test_cfg.yml"
     custom_cfg.write_text(
         """
@@ -173,7 +173,7 @@ server:
 
 
 @patch("w2v.cli.subprocess.call", return_value=0)
-def test_cli_mlflow_start_cli_overrides_mocked(mock_call: patch) -> None:
+def test_cli_mlflow_start_cli_overrides_mocked(mock_call: MagicMock) -> None:
     ret = main(["mlflow", "start", "--host", "0.0.0.0", "--port", "9999"])
     assert ret == 0
     assert mock_call.called
