@@ -1,0 +1,85 @@
+[project]
+name = "word2vec"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ipykernel>=7.4.0",
+    "matplotlib>=3.11.2",
+    "mlflow>=3.17.2",
+    "nbclient>=0.11.0",
+    "nbformat>=5.11.1",
+    "nltk>=3.9.2",
+    "pandas>=2.3.3",
+    "plotly>=7.1.0",
+    "pyarrow>=22.0.0",
+    "pyyaml>=6.0.3",
+    "regex>=2025.11.3",
+    "scikit-learn>=1.9.1",
+    "torch>=2.5.1",
+]
+
+[tool.uv]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.1.6",
+    "mypy>=2.4.0",
+    "pre-commit<4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.1",
+    "types-pyyaml>=6.0.12.20261030",
+]
+
+[project.scripts]
+w2v = "w2v.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["w2v"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "*.ipynb",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line length (handled by formatter or long logging/text)
+    "RUF012", # mutable default values in class bodies
+    "B905",   # zip() without an explicit strict= parameter
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["w2v"]
+ignore_missing_imports = true
+warn_unused_configs = true
+check_untyped_defs = true
