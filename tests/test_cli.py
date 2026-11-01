@@ -56,7 +56,9 @@ def test_cli_main_skipgram(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    assert (out_dir / "word2vec_embeddings.txt").exists()
+    saved = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    assert len(saved) == 1
+    assert saved[0].exists()
 
 
 def test_cli_main_bow(tmp_path: Path) -> None:
@@ -91,7 +93,9 @@ def test_cli_main_bow(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    assert (out_dir / "bow_embeddings.txt").exists()
+    saved = list(out_dir.glob("bow_embeddings_*.txt"))
+    assert len(saved) == 1
+    assert saved[0].exists()
 
 
 def test_cli_main_error_handling() -> None:
@@ -153,7 +157,104 @@ def test_cli_main_no_mlflow(tmp_path: Path) -> None:
         ]
     )
     assert ret == 0
-    assert (out_dir / "word2vec_embeddings.txt").exists()
+    saved = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    assert len(saved) == 1
+    assert saved[0].exists()
+
+
+def test_cli_main_custom_filename_and_no_overwrite(tmp_path: Path) -> None:
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "text.txt").write_text("alpha beta gamma alpha beta gamma", encoding="utf-8")
+
+    out_dir = tmp_path / "embeddings"
+    log_dir = tmp_path / "logs"
+
+    # Test custom output filename
+    ret = main(
+        [
+            "--model",
+            "skipgram",
+            "--corpus-dir",
+            str(corpus_dir),
+            "--output-dir",
+            str(out_dir),
+            "--output-filename",
+            "custom_embeddings.txt",
+            "--log-dir",
+            str(log_dir),
+            "--no-sync-corpora",
+            "--no-mlflow",
+            "--embedding-dim",
+            "8",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--min-count",
+            "1",
+            "--device",
+            "cpu",
+        ]
+    )
+    assert ret == 0
+    assert (out_dir / "custom_embeddings.txt").exists()
+
+    # Test two successive runs with default filename do not overwrite each other
+    ret1 = main(
+        [
+            "--model",
+            "skipgram",
+            "--corpus-dir",
+            str(corpus_dir),
+            "--output-dir",
+            str(out_dir),
+            "--log-dir",
+            str(log_dir),
+            "--no-sync-corpora",
+            "--no-mlflow",
+            "--embedding-dim",
+            "8",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--min-count",
+            "1",
+            "--device",
+            "cpu",
+        ]
+    )
+    assert ret1 == 0
+
+    ret2 = main(
+        [
+            "--model",
+            "skipgram",
+            "--corpus-dir",
+            str(corpus_dir),
+            "--output-dir",
+            str(out_dir),
+            "--log-dir",
+            str(log_dir),
+            "--no-sync-corpora",
+            "--no-mlflow",
+            "--embedding-dim",
+            "8",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--min-count",
+            "1",
+            "--device",
+            "cpu",
+        ]
+    )
+    assert ret2 == 0
+
+    default_files = list(out_dir.glob("word2vec_embeddings_*.txt"))
+    assert len(default_files) == 2
 
 
 @patch("w2v.cli.subprocess.call", return_value=0)

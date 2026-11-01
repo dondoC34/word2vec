@@ -91,6 +91,14 @@ def test_skipgram_training_and_inference(tmp_path: Path) -> None:
     p_pt = sg.save_embeddings(output_dir=tmp_path, format="pt", filename="emb.pt")
     assert p_pt.exists()
 
+    # Default timestamped filename and no-overwrite behavior
+    p_default1 = sg.save_embeddings(output_dir=tmp_path)
+    assert p_default1.exists()
+    assert "word2vec_embeddings_" in p_default1.name
+    p_default2 = sg.save_embeddings(output_dir=tmp_path)
+    assert p_default2.exists()
+    assert p_default1 != p_default2
+
     with pytest.raises(ValueError):
         sg.save_embeddings(output_dir=tmp_path, format="unsupported_format")
 

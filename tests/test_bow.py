@@ -62,6 +62,14 @@ def test_bow_training_and_inference(tmp_path: Path) -> None:
     p_pt = bow.save_embeddings(output_dir=tmp_path, format="pt", filename="cbow.pt")
     assert p_pt.exists()
 
+    # Default timestamped filename and no-overwrite behavior
+    p_default1 = bow.save_embeddings(output_dir=tmp_path)
+    assert p_default1.exists()
+    assert "bow_embeddings_" in p_default1.name
+    p_default2 = bow.save_embeddings(output_dir=tmp_path)
+    assert p_default2.exists()
+    assert p_default1 != p_default2
+
     with pytest.raises(ValueError):
         bow.save_embeddings(output_dir=tmp_path, format="invalid")
 
