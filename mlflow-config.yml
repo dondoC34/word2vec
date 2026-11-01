@@ -9,3 +9,4 @@ tracking:
   autolog_figures: true
   autolog_model: true
   system_metrics: true
+  system_metrics_sampling_interval: 1

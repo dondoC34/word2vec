@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "autolog_figures": True,
         "autolog_model": True,
         "system_metrics": True,
+        "system_metrics_sampling_interval": 1,
     },
 }
 
@@ -335,6 +336,10 @@ class MLflowTracker:
             # Enable system metrics logging if configured
             if self.system_metrics:
                 try:
+                    os.environ["MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"] = "true"
+                    interval = str(self.config.get("tracking", {}).get("system_metrics_sampling_interval", 1))
+                    os.environ["MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL"] = interval
+                    os.environ["MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING"] = "1"
                     mlflow.enable_system_metrics_logging()
                 except Exception as e:
                     logger.debug("Failed enabling system metrics logging: %s", e)
@@ -365,7 +370,10 @@ class MLflowTracker:
                 run_name = f"{self.model_name.lower()}_{dim_str}_{ts}".rstrip("_")
 
             # Start the active run
-            active_run = mlflow.start_run(run_name=run_name)
+            active_run = mlflow.start_run(
+                run_name=run_name,
+                log_system_metrics=self.system_metrics,
+            )
             self.run_id = active_run.info.run_id
 
             # Set descriptive tags
