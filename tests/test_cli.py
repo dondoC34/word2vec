@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from w2v.cli import W2VArgumentParser, create_parser, main
 
 
@@ -349,3 +351,108 @@ def test_cli_mlflow_start_cli_overrides_mocked(mock_call: MagicMock) -> None:
     cmd = mock_call.call_args[0][0]
     assert "0.0.0.0" in cmd
     assert "9999" in cmd
+
+
+@patch("w2v.cli.subprocess.call", return_value=0)
+def test_cli_mlflow_run_alias_mocked(mock_call: MagicMock) -> None:
+    ret = main(["mlflow", "run"])
+    assert ret == 0
+    assert mock_call.called
+
+
+@patch("w2v.cli.get_mlflow_status")
+def test_cli_mlflow_status_mocked(mock_status: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    mock_status.return_value = {
+        "host": "127.0.0.1",
+        "port": 5000,
+        "server_online": True,
+        "backend_store_uri": "sqlite:///mlflow.db",
+        "db_path": "/fake/mlflow.db",
+        "db_exists": True,
+        "db_size_bytes": 10240,
+        "artifact_dir": "/fake/mlartifacts",
+        "artifact_exists": True,
+        "artifact_file_count": 5,
+        "artifact_size_bytes": 20480,
+        "experiment_count": 2,
+        "total_runs": 4,
+        "runs_by_status": {"FINISHED": 4},
+        "best_loss_by_experiment": {"Word2Vec-SkipGram": (3.14, "abcd1234")},
+    }
+    ret = main(["mlflow", "status"])
+    assert ret == 0
+    captured = capsys.readouterr().out
+    assert "System & Storage Status" in captured
+    assert "[ONLINE]" in captured
+    assert "Word2Vec-SkipGram" in captured
+
+
+@patch("w2v.cli.list_mlflow_runs")
+def test_cli_mlflow_list_and_runs_alias(mock_list: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    mock_list.return_value = [
+        {
+            "run_id": "12345678abcdef",
+            "experiment_name": "Word2Vec-SkipGram",
+            "model": "SkipGram",
+            "embedding_dim": "128",
+            "epochs": "5",
+            "final_loss": "3.1415",
+            "status": "FINISHED",
+            "created_at": "2026-11-02 10:00:00",
+        }
+    ]
+    ret1 = main(["mlflow", "list", "--limit", "1"])
+    assert ret1 == 0
+    out1 = capsys.readouterr().out
+    assert "12345678" in out1
+    assert "3.1415" in out1
+
+    ret2 = main(["mlflow", "runs"])
+    assert ret2 == 0
+
+
+@patch("w2v.cli.get_best_mlflow_run")
+def test_cli_mlflow_best_mocked(mock_best: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    mock_best.return_value = {
+        "run_id": "87654321fedcba",
+        "experiment_name": "Word2Vec-SkipGram",
+        "model": "SkipGram",
+        "final_loss": "2.7182",
+        "created_at": "2026-11-02 10:00:00",
+        "params": {"embedding_dim": "128", "lr": "0.005"},
+        "embeddings_file": "/fake/embeddings.txt",
+    }
+    ret = main(["mlflow", "best"])
+    assert ret == 0
+    captured = capsys.readouterr().out
+    assert "Best Performing Run" in captured
+    assert "2.7182" in captured
+    assert "embedding_dim" in captured
+
+
+@patch("w2v.cli.clear_mlflow_data", return_value=(True, "Successfully cleared database."))
+def test_cli_mlflow_clear_and_clean_alias(mock_clear: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    # Test with -y flag bypassing input prompt
+    ret1 = main(["mlflow", "clear", "-y"])
+    assert ret1 == 0
+    assert mock_clear.called
+
+    # Test clean alias
+    ret2 = main(["mlflow", "clean", "--yes", "--artifacts-only"])
+    assert ret2 == 0
+
+
+@patch("w2v.cli.webbrowser.open")
+@patch("w2v.cli.check_mlflow_server_online", return_value=True)
+def test_cli_mlflow_ui_and_open_alias(
+    mock_online: MagicMock,
+    mock_browser: MagicMock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ret1 = main(["mlflow", "ui"])
+    assert ret1 == 0
+    assert mock_browser.called
+    assert "http://127.0.0.1:5000" in capsys.readouterr().out
+
+    ret2 = main(["mlflow", "open", "--port", "5050"])
+    assert ret2 == 0

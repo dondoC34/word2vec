@@ -9,10 +9,17 @@ import numpy as np
 from w2v.tracking import (
     DEFAULT_CONFIG,
     MLflowTracker,
+    check_mlflow_server_online,
+    clear_mlflow_data,
     create_heatmap_figure,
     create_loss_figure,
     create_pca_figure,
+    export_run_artifacts,
+    get_best_mlflow_run,
+    get_mlflow_status,
+    list_mlflow_runs,
     load_mlflow_config,
+    resolve_storage_paths,
 )
 
 
@@ -346,3 +353,135 @@ def test_mlflow_advanced_features(tmp_path: Path) -> None:
     assert "git_commit" in tags_dict
 
     conn.close()
+
+
+def test_storage_resolution_and_online_check(tmp_path: Path) -> None:
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        """
+server:
+  backend_store_uri: "sqlite:///custom.db"
+  default_artifact_root: "./custom_artifacts"
+""",
+        encoding="utf-8",
+    )
+    db_path, art_path = resolve_storage_paths(custom_cfg)
+    assert db_path is not None
+    assert db_path.name == "custom.db"
+    assert art_path.name == "custom_artifacts"
+
+    # Online check on unused port returns False
+    assert not check_mlflow_server_online(host="127.0.0.1", port=59999)
+
+
+def test_clear_mlflow_data(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_clear.db"
+    db_file.write_text("dummy db", encoding="utf-8")
+    art_dir = tmp_path / "test_artifacts"
+    art_dir.mkdir()
+    (art_dir / "sample.txt").write_text("hello", encoding="utf-8")
+    sub = art_dir / "subdir"
+    sub.mkdir()
+    (sub / "nested.txt").write_text("world", encoding="utf-8")
+
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        f"""
+server:
+  backend_store_uri: "sqlite:///{db_file.as_posix()}"
+  default_artifact_root: "{art_dir.as_posix()}"
+""",
+        encoding="utf-8",
+    )
+
+    # 1. Clear artifacts only
+    success, msg = clear_mlflow_data(custom_cfg, artifacts_only=True)
+    assert success
+    assert db_file.exists()
+    assert art_dir.exists()
+    assert len(list(art_dir.glob("*"))) == 0
+
+    # 2. Clear both db and artifacts
+    (art_dir / "another.txt").write_text("foo", encoding="utf-8")
+    success2, msg2 = clear_mlflow_data(custom_cfg, artifacts_only=False)
+    assert success2
+    assert not db_file.exists()
+    assert art_dir.exists()
+    assert len(list(art_dir.glob("*"))) == 0
+
+
+def test_mlflow_diagnostics_and_queries(tmp_path: Path) -> None:
+    db_file = tmp_path / "diag.db"
+    art_dir = tmp_path / "diag_artifacts"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "DiagTest",
+            "autolog_figures": False,
+            "autolog_model": False,
+        },
+    }
+
+    # Initial status when DB doesn't exist
+    st = get_mlflow_status(config_path=None)
+    assert "server_online" in st
+    assert "backend_store_uri" in st
+
+    # Create two runs
+    t1 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    r1 = t1.start_run(run_name="run_1")
+    assert r1 is not None
+    t1.log_epoch_metrics(epoch=1, loss=3.5)
+    t1.log_summary_metrics(history=[3.5], training_time_sec=0.1, total_tokens=100, training_samples=50, epochs=1)
+    t1.end_run()
+
+    t2 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    r2 = t2.start_run(run_name="run_2")
+    assert r2 is not None
+    t2.log_epoch_metrics(epoch=1, loss=2.1)
+    t2.log_summary_metrics(history=[2.1], training_time_sec=0.1, total_tokens=100, training_samples=50, epochs=1)
+    t2.end_run()
+
+    # Create dummy embeddings artifact for run 2
+    emb_file = art_dir / str(r2) / "artifacts" / "embeddings" / "w2v_skipgram_embeddings_test.txt"
+    emb_file.parent.mkdir(parents=True, exist_ok=True)
+    emb_file.write_text("word 0.1 0.2\n", encoding="utf-8")
+
+    # Status check with active DB
+    status_dict = get_mlflow_status(config_path=None, host="127.0.0.1")
+    assert isinstance(status_dict, dict)
+
+    # Test list_mlflow_runs
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        f"""
+server:
+  backend_store_uri: "sqlite:///{db_file.as_posix()}"
+  default_artifact_root: "{art_dir.as_posix()}"
+""",
+        encoding="utf-8",
+    )
+    runs = list_mlflow_runs(config_path=custom_cfg, sort_by="date")
+    assert len(runs) == 2
+    assert runs[0]["run_id"] == r2
+
+    runs_sorted_loss = list_mlflow_runs(config_path=custom_cfg, sort_by="loss")
+    assert len(runs_sorted_loss) == 2
+    assert runs_sorted_loss[0]["run_id"] == r2
+    assert runs_sorted_loss[0]["final_loss"] == "2.1000"
+
+    # Test get_best_mlflow_run
+    best = get_best_mlflow_run(config_path=custom_cfg)
+    assert best is not None
+    assert best["run_id"] == r2
+    assert best["final_loss"] == "2.1000"
+    assert best["embeddings_file"] is not None
+
+    # Test export_run_artifacts
+    export_dest = tmp_path / "exported"
+    copied = export_run_artifacts(r2, export_dest, config_path=custom_cfg)
+    assert len(copied) >= 1
+    assert (export_dest / "embeddings" / "w2v_skipgram_embeddings_test.txt").exists()

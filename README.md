@@ -254,16 +254,75 @@ Using the `--format` option:
 
 ---
 
-## MLflow Tracking & Dashboard
+## MLflow Tracking & CLI Management
 
-`w2v` integrates local experiment tracking powered by MLflow and SQLite.
+`w2v` integrates local experiment tracking powered by MLflow and SQLite. The CLI provides a dedicated `w2v mlflow` toolset to inspect runs, query metrics, check storage, and manage the tracking lifecycle.
 
-### Starting the Web UI
-Launch the MLflow dashboard at any time:
+> [!NOTE]
+> All `w2v mlflow` commands accept an optional `-c, --config <path>` parameter. If omitted, `w2v` automatically loads `mlflow-config.yml` from the current directory or repository root, falling back to standard defaults (`sqlite:///mlflow.db` and `./mlartifacts`).
+
+### 1. Starting the Web Server (`start` / `run`)
+Launch the MLflow tracking server and dashboard:
 ```bash
 w2v mlflow start
+# Or using the alias:
+w2v mlflow run
 ```
-Open your browser at **http://127.0.0.1:5000** to inspect:
+Options:
+- `--host`: Host IP address (default: `127.0.0.1`).
+- `--port`: Port number (default: `5000`).
+- `-c, --config`: Optional path to custom YAML config.
+
+### 2. Checking System & Storage Status (`status`)
+Inspect server status (online/offline), SQLite database file size, artifact disk usage, total runs, and best loss per experiment:
+```bash
+w2v mlflow status
+```
+
+### 3. Listing Experiment Runs (`list` / `runs`)
+Display a structured terminal table of recent training runs with their hyperparameters and final loss:
+```bash
+w2v mlflow list --limit 10
+# Or using the alias:
+w2v mlflow runs --sort-by loss --model skipgram
+```
+Options:
+- `--limit`: Number of runs to display (default: `10`).
+- `--sort-by`: Sort criteria: `date` (most recent first) or `loss` (lowest loss first).
+- `--experiment`: Filter by experiment name (e.g. `Word2Vec-SkipGram`).
+- `--model`: Filter by architecture (`skipgram` or `bow`).
+
+### 4. Inspecting the Best Performing Model (`best`)
+Find the run with the lowest recorded training loss and display its full configuration:
+```bash
+w2v mlflow best --model skipgram
+```
+To directly export the winning run's embeddings and checkpoint to a folder without hunting inside `mlartifacts/`:
+```bash
+w2v mlflow best --model skipgram --export-to ./best_model
+```
+
+### 5. Cleaning Storage & Artifacts (`clear` / `clean`)
+Permanently wipe the SQLite database records and/or artifact directories:
+```bash
+# Prompts for confirmation before deleting:
+w2v mlflow clear
+
+# Delete immediately without interactive prompt:
+w2v mlflow clear --yes
+
+# Delete only heavy visual and model artifacts, leaving run metrics in the DB intact:
+w2v mlflow clean --artifacts-only --yes
+```
+
+### 6. Opening the Web Dashboard (`ui` / `open`)
+Open the MLflow dashboard directly in your default browser:
+```bash
+w2v mlflow ui
+# Or using the alias:
+w2v mlflow open
+```
+Open **http://127.0.0.1:5000** to inspect:
 - **Metrics**: Loss convergence curves (`epoch_loss`), epoch execution times, and learning rate.
 - **Parameters & Tags**: Model architecture, embedding dimension, window size, negative samples, token caps, Git commit hash, and corpora counts.
 - **Visual Artifacts**: Loss curves, 2D PCA vector projections, cosine similarity heatmaps, semantic evaluation tables, and corpora metadata manifests.
