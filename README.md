@@ -116,6 +116,8 @@ Run `w2v --help` at any time to display the parameter table:
 | `--output-filename` | `None` | Custom output filename (defaults to timestamped `w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt`). |
 | `--format` | `word2vec` | Embedding export format (`word2vec`, `glove`, `numpy`, `pt`). |
 | `--device` | `None` | Compute device (`cuda` or `cpu`, auto-detected if None). |
+| `--mlflow` / `--no-mlflow` | `True` | Enable/disable automatic MLflow experiment tracking. |
+| `--mlflow-config` | `None` | Optional custom path to YAML config (`mlflow-config.yml`). |
 | `--log-corpora-content` / `--no-log-corpora-content` | `False` | Upload full text of training corpora to MLflow artifacts (default: False, manifest only). |
 | `--log-dir` | `./logs` | Directory where timestamped execution log files are stored. |
 | `--log-level` | `INFO` | Logging severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
@@ -190,7 +192,7 @@ When MLflow tracking is enabled:
 - **By Default**: `w2v` registers a structured metadata manifest (`corpora/corpora_manifest.json`) containing original paths, byte sizes, token counts, and **SHA-256 integrity hashes** for every corpus document without duplicating raw text files to disk.
 - **Full Text Upload**: Pass `--log-corpora-content` (or `log_corpora_content=True` in Python) if you wish to archive the actual `.txt` files into `mlartifacts/` (subject to a 50 MB safety threshold to protect disk space).
 
-### 2. Using Custom Text Corpora
+### 3. Using Custom Text Corpora
 To train on your own domain-specific documents:
 1. Place any plain UTF-8 text files (`*.txt`) inside your folder (e.g. `./my_data/book1.txt`, `./my_data/book2.txt`).
 2. Point `corpus_dir` to that folder (download is disabled by default):
@@ -198,7 +200,7 @@ To train on your own domain-specific documents:
    w2v --corpus-dir ./my_data --output-dir ./my_embeddings
    ```
 
-### 3. Document Boundary Protection
+### 4. Document Boundary Protection
 In conventional naive implementations, all corpus texts are concatenated into one long token list. This causes the last words of Book A and the first words of Book B to be treated as adjacent context neighbors, creating spurious pairings (e.g. pairing characters from different novels).
 
 `w2v` tokenizes and stores documents as isolated sequences (`List[List[str]]`). During Skip-Gram pair generation, the sliding context window is strictly constrained to the boundaries of each individual document.
@@ -249,6 +251,23 @@ Using the `--format` option:
 - `--format glove`: Pure text format without header line (`<word> <v_1> ...`).
 - `--format numpy` (or `npz`): Compressed NumPy archive containing `words` and `vectors` arrays (`np.load("embeddings.npz")`).
 - `--format pt`: PyTorch dictionary containing `{"words": list, "vectors": torch.Tensor}`.
+
+---
+
+## MLflow Tracking & Dashboard
+
+`w2v` integrates local experiment tracking powered by MLflow and SQLite.
+
+### Starting the Web UI
+Launch the MLflow dashboard at any time:
+```bash
+w2v mlflow start
+```
+Open your browser at **http://127.0.0.1:5000** to inspect:
+- **Metrics**: Loss convergence curves (`epoch_loss`), epoch execution times, and learning rate.
+- **Parameters & Tags**: Model architecture, embedding dimension, window size, negative samples, token caps, Git commit hash, and corpora counts.
+- **Visual Artifacts**: Loss curves, 2D PCA vector projections, cosine similarity heatmaps, semantic evaluation tables, and corpora metadata manifests.
+- **System Metrics**: Real-time CPU, RAM, and GPU utilization.
 
 ---
 
