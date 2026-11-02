@@ -38,7 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "autolog_figures": True,
         "autolog_model": True,
         "system_metrics": True,
-        "system_metrics_sampling_interval": 1,
+        "system_metrics_sampling_interval": 10,
     },
 }
 
@@ -337,7 +337,7 @@ class MLflowTracker:
             if self.system_metrics:
                 try:
                     os.environ["MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"] = "true"
-                    interval = str(self.config.get("tracking", {}).get("system_metrics_sampling_interval", 1))
+                    interval = str(self.config.get("tracking", {}).get("system_metrics_sampling_interval", 10))
                     os.environ["MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL"] = interval
                     os.environ["MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING"] = "1"
                     mlflow.enable_system_metrics_logging()
