@@ -397,6 +397,7 @@ server:
     # 1. Clear artifacts only
     success, msg = clear_mlflow_data(custom_cfg, artifacts_only=True)
     assert success
+    assert "Successfully cleared" in msg
     assert db_file.exists()
     assert art_dir.exists()
     assert len(list(art_dir.glob("*"))) == 0
@@ -405,6 +406,7 @@ server:
     (art_dir / "another.txt").write_text("foo", encoding="utf-8")
     success2, msg2 = clear_mlflow_data(custom_cfg, artifacts_only=False)
     assert success2
+    assert "Successfully cleared" in msg2
     assert not db_file.exists()
     assert art_dir.exists()
     assert len(list(art_dir.glob("*"))) == 0
