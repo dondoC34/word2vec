@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -62,6 +63,14 @@ def test_bow_training_and_inference(tmp_path: Path) -> None:
     p_pt = bow.save_embeddings(output_dir=tmp_path, format="pt", filename="cbow.pt")
     assert p_pt.exists()
 
+    # Default timestamped filename and no-overwrite behavior
+    p_default1 = bow.save_embeddings(output_dir=tmp_path)
+    assert p_default1.exists()
+    assert "w2v_bow_embeddings_" in p_default1.name
+    p_default2 = bow.save_embeddings(output_dir=tmp_path)
+    assert p_default2.exists()
+    assert p_default1 != p_default2
+
     with pytest.raises(ValueError):
         bow.save_embeddings(output_dir=tmp_path, format="invalid")
 
@@ -102,8 +111,9 @@ def test_bow_error_handling(tmp_path: Path) -> None:
     empty_dir.mkdir()
 
     bow = BoW(embedding_dim=8, sync_corpora_hook=False)
-    with pytest.raises(ValueError):
-        bow.load_corpus_from_dir(empty_dir)
+    with patch("w2v.base.ensure_nltk_gutenberg_corpora"):
+        with pytest.raises(ValueError):
+            bow.load_corpus_from_dir(empty_dir)
 
     with pytest.raises(ValueError):
         bow.build_dataset()

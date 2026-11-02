@@ -113,9 +113,12 @@ Run `w2v --help` at any time to display the parameter table:
 | `--batch-size` | `512` | Mini-batch size for DataLoader. |
 | `--lr` | `0.005` | Learning rate for Adam optimizer. |
 | `--output-dir` | `./embeddings` | Output directory (created automatically if missing). |
-| `--output-filename` | `None` | Custom output filename (defaults to `word2vec_embeddings.txt`). |
+| `--output-filename` | `None` | Custom output filename (defaults to timestamped `w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt`). |
 | `--format` | `word2vec` | Embedding export format (`word2vec`, `glove`, `numpy`, `pt`). |
 | `--device` | `None` | Compute device (`cuda` or `cpu`, auto-detected if None). |
+| `--mlflow` / `--no-mlflow` | `True` | Enable/disable automatic MLflow experiment tracking. |
+| `--mlflow-config` | `None` | Optional custom path to YAML config (`mlflow-config.yml`). |
+| `--log-corpora-content` / `--no-log-corpora-content` | `False` | Upload full text of training corpora to MLflow artifacts (default: False, manifest only). |
 | `--log-dir` | `./logs` | Directory where timestamped execution log files are stored. |
 | `--log-level` | `INFO` | Logging severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `-h, --help` | | Show help message with parameters table and exit. |
@@ -173,27 +176,23 @@ bow_history = bow.train(epochs=5, batch_size=512, lr=0.005)
 ## Corpora Management & Ingestion
 
 ### 1. Corpora Download & Empty Directory Handling
-By default, automatic download of corpus files is **disabled**.
 
-If the specified `--corpus-dir` is empty or does not contain any plain text files (`*.txt`) to train embeddings, `w2v` will:
-1. Log an error that no text files (`*.txt`) were found in the folder.
-2. Suggest that benchmark text corpora can be downloaded automatically using `--sync-corpora`.
-3. Provide the exact equivalent command line example to run.
+- **Empty or Non-Existent Directory**:
+  If the specified `--corpus-dir` does not exist or does not contain any plain text files (`*.txt`), `w2v` logs that no text files were found and **automatically triggers the download of sample benchmark literary corpora** (from NLTK Gutenberg) directly into that destination folder so training can proceed immediately without manual setup.
 
-#### Enabling Automatic Download
-To automatically download standard benchmark literary texts from NLTK Gutenberg:
-- **CLI**: Pass `--sync-corpora`
-  ```bash
-  w2v --corpus-dir ./corpuses --sync-corpora
-  ```
-- **Python**: Pass `sync_corpora_hook=True` (or `download=True` on Dataset classes)
-  ```python
-  sg = SkipGram(corpus_dir="./corpuses", sync_corpora_hook=True)
-  ```
+- **Pre-Populated Directory**:
+  If `--corpus-dir` already contains one or more `.txt` files, automatic download follows the `--sync-corpora` flag (disabled by default):
+  - With `--sync-corpora`, missing benchmark corpora are downloaded as a delta without touching existing files.
+  - Without `--sync-corpora`, only existing local files are ingested.
 
 Existing local files (such as `portrait_of_dorian_gray.txt`) are **never overwritten or removed**.
 
-### 2. Using Custom Text Corpora
+### 2. MLflow Corpora Tracking
+When MLflow tracking is enabled:
+- **By Default**: `w2v` registers a structured metadata manifest (`corpora/corpora_manifest.json`) containing original paths, byte sizes, token counts, and **SHA-256 integrity hashes** for every corpus document without duplicating raw text files to disk.
+- **Full Text Upload**: Pass `--log-corpora-content` (or `log_corpora_content=True` in Python) if you wish to archive the actual `.txt` files into `mlartifacts/` (subject to a 50 MB safety threshold to protect disk space).
+
+### 3. Using Custom Text Corpora
 To train on your own domain-specific documents:
 1. Place any plain UTF-8 text files (`*.txt`) inside your folder (e.g. `./my_data/book1.txt`, `./my_data/book2.txt`).
 2. Point `corpus_dir` to that folder (download is disabled by default):
@@ -201,7 +200,7 @@ To train on your own domain-specific documents:
    w2v --corpus-dir ./my_data --output-dir ./my_embeddings
    ```
 
-### 3. Document Boundary Protection
+### 4. Document Boundary Protection
 In conventional naive implementations, all corpus texts are concatenated into one long token list. This causes the last words of Book A and the first words of Book B to be treated as adjacent context neighbors, creating spurious pairings (e.g. pairing characters from different novels).
 
 `w2v` tokenizes and stores documents as isolated sequences (`List[List[str]]`). During Skip-Gram pair generation, the sliding context window is strictly constrained to the boundaries of each individual document.
@@ -252,6 +251,82 @@ Using the `--format` option:
 - `--format glove`: Pure text format without header line (`<word> <v_1> ...`).
 - `--format numpy` (or `npz`): Compressed NumPy archive containing `words` and `vectors` arrays (`np.load("embeddings.npz")`).
 - `--format pt`: PyTorch dictionary containing `{"words": list, "vectors": torch.Tensor}`.
+
+---
+
+## MLflow Tracking & CLI Management
+
+`w2v` integrates local experiment tracking powered by MLflow and SQLite. The CLI provides a dedicated `w2v mlflow` toolset to inspect runs, query metrics, check storage, and manage the tracking lifecycle.
+
+> [!NOTE]
+> All `w2v mlflow` commands accept an optional `-c, --config <path>` parameter. If omitted, `w2v` automatically loads `mlflow-config.yml` from the current directory or repository root, falling back to standard defaults (`sqlite:///mlflow.db` and `./mlartifacts`).
+
+### 1. Starting the Web Server (`start` / `run`)
+Launch the MLflow tracking server and dashboard:
+```bash
+w2v mlflow start
+# Or using the alias:
+w2v mlflow run
+```
+Options:
+- `--host`: Host IP address (default: `127.0.0.1`).
+- `--port`: Port number (default: `5000`).
+- `-c, --config`: Optional path to custom YAML config.
+
+### 2. Checking System & Storage Status (`status`)
+Inspect server status (online/offline), SQLite database file size, artifact disk usage, total runs, and best loss per experiment:
+```bash
+w2v mlflow status
+```
+
+### 3. Listing Experiment Runs (`list` / `runs`)
+Display a structured terminal table of recent training runs with their hyperparameters and final loss:
+```bash
+w2v mlflow list --limit 10
+# Or using the alias:
+w2v mlflow runs --sort-by loss --model skipgram
+```
+Options:
+- `--limit`: Number of runs to display (default: `10`).
+- `--sort-by`: Sort criteria: `date` (most recent first) or `loss` (lowest loss first).
+- `--experiment`: Filter by experiment name (e.g. `Word2Vec-SkipGram`).
+- `--model`: Filter by architecture (`skipgram` or `bow`).
+
+### 4. Inspecting the Best Performing Model (`best`)
+Find the run with the lowest recorded training loss and display its full configuration:
+```bash
+w2v mlflow best --model skipgram
+```
+To directly export the winning run's embeddings and checkpoint to a folder without hunting inside `mlartifacts/`:
+```bash
+w2v mlflow best --model skipgram --export-to ./best_model
+```
+
+### 5. Cleaning Storage & Artifacts (`clear` / `clean`)
+Permanently wipe the SQLite database records and/or artifact directories:
+```bash
+# Prompts for confirmation before deleting:
+w2v mlflow clear
+
+# Delete immediately without interactive prompt:
+w2v mlflow clear --yes
+
+# Delete only heavy visual and model artifacts, leaving run metrics in the DB intact:
+w2v mlflow clean --artifacts-only --yes
+```
+
+### 6. Opening the Web Dashboard (`ui` / `open`)
+Open the MLflow dashboard directly in your default browser:
+```bash
+w2v mlflow ui
+# Or using the alias:
+w2v mlflow open
+```
+Open **http://127.0.0.1:5000** to inspect:
+- **Metrics**: Loss convergence curves (`epoch_loss`), epoch execution times, and learning rate.
+- **Parameters & Tags**: Model architecture, embedding dimension, window size, negative samples, token caps, Git commit hash, and corpora counts.
+- **Visual Artifacts**: Loss curves, 2D PCA vector projections, cosine similarity heatmaps, semantic evaluation tables, and corpora metadata manifests.
+- **System Metrics**: Real-time CPU, RAM, and GPU utilization.
 
 ---
 

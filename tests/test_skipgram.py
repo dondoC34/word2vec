@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -91,6 +92,14 @@ def test_skipgram_training_and_inference(tmp_path: Path) -> None:
     p_pt = sg.save_embeddings(output_dir=tmp_path, format="pt", filename="emb.pt")
     assert p_pt.exists()
 
+    # Default timestamped filename and no-overwrite behavior
+    p_default1 = sg.save_embeddings(output_dir=tmp_path)
+    assert p_default1.exists()
+    assert "w2v_skipgram_embeddings_" in p_default1.name
+    p_default2 = sg.save_embeddings(output_dir=tmp_path)
+    assert p_default2.exists()
+    assert p_default1 != p_default2
+
     with pytest.raises(ValueError):
         sg.save_embeddings(output_dir=tmp_path, format="unsupported_format")
 
@@ -131,11 +140,12 @@ def test_skipgram_error_handling(tmp_path: Path) -> None:
     empty_dir.mkdir()
 
     sg = SkipGram(embedding_dim=8)
-    with pytest.raises(FileNotFoundError):
-        sg.load_corpus_from_dir(tmp_path / "nonexistent")
+    with patch("w2v.base.ensure_nltk_gutenberg_corpora"):
+        with pytest.raises(ValueError):
+            sg.load_corpus_from_dir(tmp_path / "nonexistent")
 
-    with pytest.raises(ValueError):
-        sg.load_corpus_from_dir(empty_dir)
+        with pytest.raises(ValueError):
+            sg.load_corpus_from_dir(empty_dir)
 
     with pytest.raises(ValueError):
         sg.build_dataset()

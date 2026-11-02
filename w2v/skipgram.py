@@ -98,7 +98,8 @@ class SkipGram(BaseWord2Vec):
     """
 
     _logger_name: str = "SkipGram"
-    _default_export_filename: str = "word2vec_embeddings.txt"
+    _model_name: str = "skipgram"
+    _default_export_filename: str = "w2v_skipgram_embeddings.txt"
 
     def _create_dataset(self) -> SkipGramDataset:
         return SkipGramDataset(

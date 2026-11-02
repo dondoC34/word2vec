@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,10 +9,17 @@ import numpy as np
 from w2v.tracking import (
     DEFAULT_CONFIG,
     MLflowTracker,
+    check_mlflow_server_online,
+    clear_mlflow_data,
     create_heatmap_figure,
     create_loss_figure,
     create_pca_figure,
+    export_run_artifacts,
+    get_best_mlflow_run,
+    get_mlflow_status,
+    list_mlflow_runs,
     load_mlflow_config,
+    resolve_storage_paths,
 )
 
 
@@ -154,3 +162,328 @@ def test_mlflow_tracker_sqlite_lifecycle(tmp_path: Path) -> None:
     assert 2 in loss_steps
 
     conn.close()
+
+
+def test_mlflow_tracker_log_corpora(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_corpora.db"
+    art_dir = tmp_path / "artifacts"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "TestCorpora",
+            "autolog_figures": False,
+            "autolog_model": False,
+        },
+    }
+
+    # Case 1: Explicit log_content=True (below 50MB threshold) -> manifest + .txt files
+    c1 = tmp_path / "book1.txt"
+    c1.write_text("the quick brown fox jumps over the lazy dog", encoding="utf-8")
+    c2 = tmp_path / "book2.txt"
+    c2.write_text("alice was beginning to get very tired of sitting by her sister", encoding="utf-8")
+
+    tracker = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id = tracker.start_run(run_name="corpora_run")
+    assert run_id is not None
+
+    tracker.log_corpora(
+        corpus_files=[c1, c2],
+        documents=[["the", "quick", "fox"], ["alice", "sister"]],
+        log_content=True,
+        max_content_size_bytes=50 * 1024 * 1024,
+    )
+    tracker.end_run()
+
+    # Verify artifacts on disk
+    manifest_candidates = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates) == 1
+    manifest_path = manifest_candidates[0]
+    assert manifest_path.exists()
+
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest_data = json.load(f)
+    assert manifest_data["total_files"] == 2
+    assert manifest_data["content_logged"] is True
+    assert len(manifest_data["files"]) == 2
+    assert manifest_data["files"][0]["filename"] == "book1.txt"
+    assert "sha256" in manifest_data["files"][0]
+
+    # Verify actual .txt files copied
+    corpora_dir = manifest_path.parent
+    assert (corpora_dir / "book1.txt").exists()
+    assert (corpora_dir / "book2.txt").exists()
+
+    # Case 2: Default log_content=False -> manifest only, NO .txt copy
+    tracker_default = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id_default = tracker_default.start_run(run_name="corpora_default_no_content")
+    assert run_id_default is not None
+
+    tracker_default.log_corpora(
+        corpus_files=[c1, c2],
+        log_content=False,
+    )
+    tracker_default.end_run()
+
+    manifest_candidates_def = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates_def) == 2
+    def_manifest_path = next(m for m in manifest_candidates_def if str(m) != str(manifest_path))
+    with open(def_manifest_path, encoding="utf-8") as f:
+        def_manifest_data = json.load(f)
+    assert def_manifest_data["content_logged"] is False
+    assert not (def_manifest_path.parent / "book1.txt").exists()
+
+    # Case 3: Corpora size exceeds threshold (even if log_content=True) -> only manifest
+    tracker2 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id2 = tracker2.start_run(run_name="corpora_exceed_threshold")
+    assert run_id2 is not None
+
+    tracker2.log_corpora(
+        corpus_files=[c1, c2],
+        log_content=True,
+        max_content_size_bytes=10,  # 10 bytes threshold is smaller than the files
+    )
+    tracker2.end_run()
+
+    manifest_candidates2 = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates2) == 3
+    new_manifest_path = next(m for m in manifest_candidates2 if m not in (manifest_path, def_manifest_path))
+    with open(new_manifest_path, encoding="utf-8") as f:
+        manifest_data2 = json.load(f)
+    assert manifest_data2["content_logged"] is False
+    # Verify .txt files were NOT copied into this run's corpora artifact dir
+    assert not (new_manifest_path.parent / "book1.txt").exists()
+
+    # Case 4: In-memory dataset (empty corpus files list)
+    tracker3 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    tracker3.start_run(run_name="corpora_in_memory")
+    tracker3.log_corpora(corpus_files=[])
+    tracker3.end_run()
+
+    manifest_candidates3 = list(art_dir.glob("**/corpora/corpora_manifest.json"))
+    assert len(manifest_candidates3) == 4
+    in_mem_manifest = next(
+        m for m in manifest_candidates3 if m not in (manifest_path, def_manifest_path, new_manifest_path)
+    )
+    with open(in_mem_manifest, encoding="utf-8") as f:
+        in_mem_data = json.load(f)
+    assert in_mem_data["total_files"] == 0
+    assert in_mem_data["source"] == "in-memory"
+
+
+def test_mlflow_advanced_features(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_advanced.db"
+    art_dir = tmp_path / "artifacts_advanced"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "TestAdvanced",
+            "autolog_figures": False,
+            "autolog_model": False,
+            "system_metrics": True,
+        },
+    }
+
+    tracker = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    run_id = tracker.start_run(run_name="adv_run")
+    assert run_id is not None
+
+    # 1. Epoch metrics with timing
+    tracker.log_epoch_metrics(epoch=1, loss=4.5, epoch_time_sec=0.25)
+    tracker.log_epoch_metrics(epoch=2, loss=3.2, epoch_time_sec=0.20)
+
+    # 2. Summary metrics with throughput
+    tracker.log_summary_metrics(
+        history=[4.5, 3.2],
+        training_time_sec=0.50,
+        total_tokens=1000,
+        training_samples=500,
+        epochs=2,
+    )
+
+    # 3. Semantic table evaluation
+    mock_model = MagicMock()
+    mock_dataset = MagicMock()
+    mock_dataset.stoi = {"apple": 0, "banana": 1, "cherry": 2}
+    mock_dataset.counts = {"apple": 10, "banana": 8, "cherry": 5}
+    mock_model.dataset = mock_dataset
+    mock_model.most_similar.side_effect = lambda w, top_k=5: [("fruit", 0.88), ("tree", 0.65)]
+
+    tracker.log_semantic_table(mock_model, candidate_words=["apple", "banana"])
+
+    # End run
+    tracker.end_run()
+    assert tracker.run_id is None
+    assert tracker.last_run_id == run_id
+
+    # 4. Post-run artifact logging (e.g. exported embeddings)
+    exported_emb = tmp_path / "w2v_skipgram_embeddings_20261101_2200.txt"
+    exported_emb.write_text("apple 0.1 0.2\nbanana 0.3 0.4\n", encoding="utf-8")
+    tracker.log_artifact(exported_emb, artifact_path="embeddings")
+
+    # Verify artifacts and metrics
+    emb_candidates = list(art_dir.glob("**/embeddings/w2v_skipgram_embeddings_20261101_2200.txt"))
+    assert len(emb_candidates) == 1
+    assert emb_candidates[0].exists()
+
+    table_candidates = list(art_dir.glob("**/evaluations/semantic_neighbors.json"))
+    assert len(table_candidates) == 1
+    assert table_candidates[0].exists()
+
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT key, value FROM metrics WHERE run_uuid = ?", (run_id,))
+    metrics_dict = {row[0]: row[1] for row in cursor.fetchall()}
+    assert "tokens_per_second" in metrics_dict
+    assert "samples_per_second" in metrics_dict
+    assert "epoch_time_seconds" in metrics_dict
+    assert "mean_top1_similarity" in metrics_dict
+    assert metrics_dict["mean_top1_similarity"] == 0.88
+
+    # Verify git tags if present
+    cursor.execute("SELECT key, value FROM tags WHERE run_uuid = ?", (run_id,))
+    tags_dict = {row[0]: row[1] for row in cursor.fetchall()}
+    assert "git_branch" in tags_dict
+    assert "git_commit" in tags_dict
+
+    conn.close()
+
+
+def test_storage_resolution_and_online_check(tmp_path: Path) -> None:
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        """
+server:
+  backend_store_uri: "sqlite:///custom.db"
+  default_artifact_root: "./custom_artifacts"
+""",
+        encoding="utf-8",
+    )
+    db_path, art_path = resolve_storage_paths(custom_cfg)
+    assert db_path is not None
+    assert db_path.name == "custom.db"
+    assert art_path.name == "custom_artifacts"
+
+    # Online check on unused port returns False
+    assert not check_mlflow_server_online(host="127.0.0.1", port=59999)
+
+
+def test_clear_mlflow_data(tmp_path: Path) -> None:
+    db_file = tmp_path / "test_clear.db"
+    db_file.write_text("dummy db", encoding="utf-8")
+    art_dir = tmp_path / "test_artifacts"
+    art_dir.mkdir()
+    (art_dir / "sample.txt").write_text("hello", encoding="utf-8")
+    sub = art_dir / "subdir"
+    sub.mkdir()
+    (sub / "nested.txt").write_text("world", encoding="utf-8")
+
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        f"""
+server:
+  backend_store_uri: "sqlite:///{db_file.as_posix()}"
+  default_artifact_root: "{art_dir.as_posix()}"
+""",
+        encoding="utf-8",
+    )
+
+    # 1. Clear artifacts only
+    success, msg = clear_mlflow_data(custom_cfg, artifacts_only=True)
+    assert success
+    assert "Successfully cleared" in msg
+    assert db_file.exists()
+    assert art_dir.exists()
+    assert len(list(art_dir.glob("*"))) == 0
+
+    # 2. Clear both db and artifacts
+    (art_dir / "another.txt").write_text("foo", encoding="utf-8")
+    success2, msg2 = clear_mlflow_data(custom_cfg, artifacts_only=False)
+    assert success2
+    assert "Successfully cleared" in msg2
+    assert not db_file.exists()
+    assert art_dir.exists()
+    assert len(list(art_dir.glob("*"))) == 0
+
+
+def test_mlflow_diagnostics_and_queries(tmp_path: Path) -> None:
+    db_file = tmp_path / "diag.db"
+    art_dir = tmp_path / "diag_artifacts"
+    config = {
+        "server": {
+            "backend_store_uri": f"sqlite:///{db_file}",
+            "default_artifact_root": str(art_dir),
+        },
+        "tracking": {
+            "experiment_prefix": "DiagTest",
+            "autolog_figures": False,
+            "autolog_model": False,
+        },
+    }
+
+    # Initial status when DB doesn't exist
+    st = get_mlflow_status(config_path=None)
+    assert "server_online" in st
+    assert "backend_store_uri" in st
+
+    # Create two runs
+    t1 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    r1 = t1.start_run(run_name="run_1")
+    assert r1 is not None
+    t1.log_epoch_metrics(epoch=1, loss=3.5)
+    t1.log_summary_metrics(history=[3.5], training_time_sec=0.1, total_tokens=100, training_samples=50, epochs=1)
+    t1.end_run()
+
+    t2 = MLflowTracker(model_name="SkipGram", enabled=True, config=config)
+    r2 = t2.start_run(run_name="run_2")
+    assert r2 is not None
+    t2.log_epoch_metrics(epoch=1, loss=2.1)
+    t2.log_summary_metrics(history=[2.1], training_time_sec=0.1, total_tokens=100, training_samples=50, epochs=1)
+    t2.end_run()
+
+    # Create dummy embeddings artifact for run 2
+    emb_file = art_dir / str(r2) / "artifacts" / "embeddings" / "w2v_skipgram_embeddings_test.txt"
+    emb_file.parent.mkdir(parents=True, exist_ok=True)
+    emb_file.write_text("word 0.1 0.2\n", encoding="utf-8")
+
+    # Status check with active DB
+    status_dict = get_mlflow_status(config_path=None, host="127.0.0.1")
+    assert isinstance(status_dict, dict)
+
+    # Test list_mlflow_runs
+    custom_cfg = tmp_path / "cfg.yml"
+    custom_cfg.write_text(
+        f"""
+server:
+  backend_store_uri: "sqlite:///{db_file.as_posix()}"
+  default_artifact_root: "{art_dir.as_posix()}"
+""",
+        encoding="utf-8",
+    )
+    runs = list_mlflow_runs(config_path=custom_cfg, sort_by="date")
+    assert len(runs) == 2
+    assert runs[0]["run_id"] == r2
+
+    runs_sorted_loss = list_mlflow_runs(config_path=custom_cfg, sort_by="loss")
+    assert len(runs_sorted_loss) == 2
+    assert runs_sorted_loss[0]["run_id"] == r2
+    assert runs_sorted_loss[0]["final_loss"] == "2.1000"
+
+    # Test get_best_mlflow_run
+    best = get_best_mlflow_run(config_path=custom_cfg)
+    assert best is not None
+    assert best["run_id"] == r2
+    assert best["final_loss"] == "2.1000"
+    assert best["embeddings_file"] is not None
+
+    # Test export_run_artifacts
+    export_dest = tmp_path / "exported"
+    copied = export_run_artifacts(r2, export_dest, config_path=custom_cfg)
+    assert len(copied) >= 1
+    assert (export_dest / "embeddings" / "w2v_skipgram_embeddings_test.txt").exists()

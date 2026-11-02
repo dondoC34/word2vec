@@ -89,7 +89,8 @@ class BaseWord2Vec(ABC):
     """
 
     _logger_name: str = "BaseWord2Vec"
-    _default_export_filename: str = "word2vec_embeddings.txt"
+    _model_name: str = "word2vec"
+    _default_export_filename: str = "w2v_word2vec_embeddings.txt"
 
     def __init__(
         self,
@@ -108,6 +109,7 @@ class BaseWord2Vec(ABC):
         log_dir: str | Path = "./logs",
         enable_mlflow: bool = True,
         mlflow_config: str | Path | dict | None = None,
+        log_corpora_content: bool = False,
     ):
         if not logging.getLogger().handlers:
             setup_logging(log_dir=log_dir)
@@ -122,6 +124,7 @@ class BaseWord2Vec(ABC):
         self.corpus_dir = Path(corpus_dir) if corpus_dir else None
         self.enable_mlflow = enable_mlflow
         self.mlflow_config = mlflow_config
+        self.log_corpora_content = log_corpora_content
 
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,6 +149,7 @@ class BaseWord2Vec(ABC):
         self.dataset: Dataset | None = None
         self.model: nn.Module | None = None
         self.history: list[float] = []
+        self.tracker: MLflowTracker | None = None
 
         if dataset is not None:
             self.set_dataset(dataset, vocab_size=vocab_size)
@@ -206,26 +210,30 @@ class BaseWord2Vec(ABC):
         the sliding context window strictly respects document boundaries.
         """
         corpus_path = Path(corpus_dir)
-        if not corpus_path.exists() or not corpus_path.is_dir():
-            self.logger.error("Corpus directory not found: '%s'", corpus_dir)
-            raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
+        existing_txt = sorted(list(corpus_path.glob("*.txt"))) if corpus_path.exists() and corpus_path.is_dir() else []
 
-        txt_files = sorted(list(corpus_path.glob("*.txt")))
-        if not txt_files:
-            self.logger.error(
-                "Corpus directory '%s' does not contain any text files (*.txt) to train embeddings.",
+        if not existing_txt:
+            self.logger.info(
+                "Corpus directory '%s' does not exist or does not contain any text files (*.txt). "
+                "Automatically triggering download of sample NLTK Gutenberg corpora into '%s'...",
+                corpus_dir,
                 corpus_dir,
             )
-            self.logger.info(
-                "Automatic download of corpora is disabled by default. "
-                "You can automatically download sample text files using the '--sync-corpora' parameter "
-                "(or pass 'sync_corpora_hook=True' / 'download=True' in Python)."
+            corpus_path.mkdir(parents=True, exist_ok=True)
+            ensure_nltk_gutenberg_corpora(corpus_path)
+            txt_files = sorted(list(corpus_path.glob("*.txt")))
+        else:
+            if self.sync_corpora_hook:
+                ensure_nltk_gutenberg_corpora(corpus_path)
+            txt_files = sorted(list(corpus_path.glob("*.txt")))
+
+        if not txt_files:
+            self.logger.error(
+                "Corpus directory '%s' does not contain any text files (*.txt) and automatic sample download could not provide any.",
+                corpus_dir,
             )
-            self.logger.info('Example command:\n  w2v --corpus-dir "%s" --sync-corpora', corpus_dir)
             raise ValueError(
-                f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings. "
-                f"Enable automatic download using '--sync-corpora' (or pass sync_corpora_hook=True). "
-                f'Example command: w2v --corpus-dir "{corpus_dir}" --sync-corpora'
+                f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings."
             )
 
         self.corpus_files = [str(f) for f in txt_files]
@@ -326,6 +334,7 @@ class BaseWord2Vec(ABC):
         enable_mlflow: bool | None = None,
         mlflow_config: str | Path | dict | None = None,
         run_name: str | None = None,
+        log_corpora_content: bool | None = None,
     ) -> list[float]:
         """
         Trains the model over the dataset across the specified number of epochs.
@@ -347,6 +356,7 @@ class BaseWord2Vec(ABC):
             enabled=use_mlflow,
             config=resolved_config,
         )
+        self.tracker = tracker
 
         self.model.train()
         collate_fn = getattr(self.dataset, "collate_fn", None)
@@ -400,6 +410,7 @@ class BaseWord2Vec(ABC):
         start_time = time.time()
 
         for epoch in range(1, epochs + 1):
+            epoch_start = time.time()
             total_loss = 0.0
             num_batches = 0
             for batch in dataloader:
@@ -411,15 +422,21 @@ class BaseWord2Vec(ABC):
                 total_loss += loss.item()
                 num_batches += 1
 
+            epoch_time = time.time() - epoch_start
             avg_loss = total_loss / max(num_batches, 1)
             history.append(avg_loss)
             self.logger.info(
-                "Epoch [%d/%d] - Average Loss: %.4f across %d batches.", epoch, epochs, avg_loss, num_batches
+                "Epoch [%d/%d] - Average Loss: %.4f across %d batches (%.2fs).",
+                epoch,
+                epochs,
+                avg_loss,
+                num_batches,
+                epoch_time,
             )
 
-            # Log epoch loss to MLflow
+            # Log epoch metrics to MLflow
             if tracker.enabled:
-                tracker.log_epoch_loss(epoch, avg_loss)
+                tracker.log_epoch_metrics(epoch=epoch, loss=avg_loss, epoch_time_sec=epoch_time)
 
         elapsed = time.time() - start_time
         self.logger.info(
@@ -429,8 +446,18 @@ class BaseWord2Vec(ABC):
 
         # Finalize MLflow tracking and log artifacts
         if tracker.enabled:
-            tracker.log_summary_metrics(history, elapsed)
+            tracker.log_summary_metrics(
+                history=history,
+                training_time_sec=elapsed,
+                total_tokens=len(self.tokens),
+                training_samples=len(self.dataset) if isinstance(self.dataset, Sized) else 0,
+                epochs=epochs,
+            )
             tracker.log_figures(history, self, self.dataset)
+            tracker.log_semantic_table(self)
+            corpus_files_to_log: list[str | Path] = list(self.corpus_files or getattr(self.dataset, "corpus_files", []))
+            should_log_content = self.log_corpora_content if log_corpora_content is None else log_corpora_content
+            tracker.log_corpora(corpus_files_to_log, self.documents, log_content=should_log_content)
             tracker.log_model_checkpoint(self.model)
             run_id = tracker.run_id
             tracker.end_run()
@@ -515,6 +542,34 @@ class BaseWord2Vec(ABC):
                 results.append((itos[idx], float(val)))
             return results
 
+    def _resolve_export_filename(
+        self,
+        filename: str | None,
+        ext: str,
+        dest: Path,
+    ) -> str:
+        """
+        Resolves the export filename for embeddings.
+        If an explicit filename is provided, it is returned unmodified.
+        Otherwise, generates a filename matching:
+          w2v_{model name}_embeddings_YYYYmmdd_hh_MM{ext}
+        (e.g. 'w2v_skipgram_embeddings_20261101_21_38.txt')
+        If a file with the same timestamp already exists, an incremental counter is appended.
+        """
+        if filename is not None:
+            return filename
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H_%M")
+        model_name = getattr(self, "_model_name", "word2vec").lower()
+        base_name = f"w2v_{model_name}_embeddings_{timestamp}"
+        candidate = f"{base_name}{ext}"
+        if (dest / candidate).exists():
+            counter = 1
+            while (dest / f"{base_name}_{counter}{ext}").exists():
+                counter += 1
+            return f"{base_name}_{counter}{ext}"
+        return candidate
+
     def save_embeddings(
         self,
         output_dir: str | Path = "./embeddings",
@@ -524,6 +579,9 @@ class BaseWord2Vec(ABC):
         """
         Saves the learned word embeddings to the specified directory.
         If the destination directory does not exist, it is created automatically.
+        If filename is None, a timestamped filename with signature
+        w2v_{model name}_embeddings_YYYYmmdd_hh_MM{ext} is used to prevent new
+        executions from overwriting previous embeddings.
         """
         if self.model is None or self.dataset is None:
             self.logger.error("Cannot save embeddings: model or dataset is not initialized.")
@@ -542,7 +600,7 @@ class BaseWord2Vec(ABC):
         fmt = format.lower()
 
         if fmt in ("word2vec", "txt", "vec"):
-            out_filename = filename or self._default_export_filename
+            out_filename = self._resolve_export_filename(filename, ".txt", dest)
             filepath = dest / out_filename
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(f"{vocab_size} {embedding_dim}\n")
@@ -550,14 +608,14 @@ class BaseWord2Vec(ABC):
                     vec_str = " ".join(f"{val:.6f}" for val in vec)
                     f.write(f"{word} {vec_str}\n")
         elif fmt == "glove":
-            out_filename = filename or "glove_embeddings.txt"
+            out_filename = self._resolve_export_filename(filename, ".txt", dest)
             filepath = dest / out_filename
             with open(filepath, "w", encoding="utf-8") as f:
                 for word, vec in zip(itos, embeddings_matrix):
                     vec_str = " ".join(f"{val:.6f}" for val in vec)
                     f.write(f"{word} {vec_str}\n")
         elif fmt in ("numpy", "npz"):
-            out_filename = filename or self._default_export_filename.replace(".txt", ".npz")
+            out_filename = self._resolve_export_filename(filename, ".npz", dest)
             filepath = dest / out_filename
             np.savez_compressed(
                 filepath,
@@ -565,7 +623,7 @@ class BaseWord2Vec(ABC):
                 vectors=embeddings_matrix.astype(np.float32),
             )
         elif fmt == "pt":
-            out_filename = filename or self._default_export_filename.replace(".txt", ".pt")
+            out_filename = self._resolve_export_filename(filename, ".pt", dest)
             filepath = dest / out_filename
             torch.save(
                 {
@@ -586,4 +644,9 @@ class BaseWord2Vec(ABC):
             embedding_dim,
             fmt,
         )
+
+        # Log exported embeddings artifact to MLflow run if tracking was enabled
+        if self.tracker is not None and self.tracker.enabled:
+            self.tracker.log_artifact(filepath, artifact_path="embeddings")
+
         return filepath
