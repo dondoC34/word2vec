@@ -17,6 +17,7 @@ def test_create_parser() -> None:
     parser = create_parser()
     args_default = parser.parse_args([])
     assert args_default.sync_corpora is False
+    assert args_default.log_corpora_content is False
 
     args = parser.parse_args(["--model", "cbow", "--embedding-dim", "64", "--epochs", "2"])
     assert args.model == "cbow"
@@ -98,19 +99,49 @@ def test_cli_main_bow(tmp_path: Path) -> None:
     assert saved[0].exists()
 
 
-def test_cli_main_error_handling() -> None:
-    # Invalid directory raises FileNotFoundError in pipeline, caught by main returning 1
-    ret = main(["--corpus-dir", "/path/that/definitely/does/not/exist/12345", "--no-sync-corpora"])
-    assert ret == 1
+def test_cli_main_error_handling(tmp_path: Path) -> None:
+    # When directory cannot be used and download fails, main returns 1
+    non_existent = tmp_path / "nonexistent_dir_12345"
+    with patch("w2v.data.dataset.ensure_nltk_gutenberg_corpora", side_effect=RuntimeError("Download failed")):
+        ret = main(["--corpus-dir", str(non_existent), "--no-sync-corpora", "--no-mlflow"])
+        assert ret == 1
 
 
 def test_cli_main_empty_corpus_dir(tmp_path: Path) -> None:
     empty_dir = tmp_path / "empty_corpus"
     empty_dir.mkdir()
     log_dir = tmp_path / "logs"
+    out_dir = tmp_path / "embeddings"
 
-    ret = main(["--corpus-dir", str(empty_dir), "--log-dir", str(log_dir), "--no-mlflow"])
-    assert ret == 1
+    with patch("w2v.data.dataset.ensure_nltk_gutenberg_corpora") as mock_dl:
+
+        def create_sample(dest: Path | str) -> list[Path]:
+            p = Path(dest) / "sample.txt"
+            p.write_text("the quick brown fox jumps over the lazy dog " * 5, encoding="utf-8")
+            return [p]
+
+        mock_dl.side_effect = create_sample
+        ret = main(
+            [
+                "--corpus-dir",
+                str(empty_dir),
+                "--output-dir",
+                str(out_dir),
+                "--log-dir",
+                str(log_dir),
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--embedding-dim",
+                "8",
+                "--min-count",
+                "1",
+                "--no-mlflow",
+            ]
+        )
+        assert ret == 0
+        assert mock_dl.called
 
 
 def test_cli_main_dir_without_txt_files(tmp_path: Path) -> None:
@@ -120,8 +151,22 @@ def test_cli_main_dir_without_txt_files(tmp_path: Path) -> None:
     (dir_without_txt / "data.csv").write_text("a,b,c", encoding="utf-8")
     log_dir = tmp_path / "logs"
 
-    ret = main(["--corpus-dir", str(dir_without_txt), "--log-dir", str(log_dir), "--no-mlflow"])
-    assert ret == 1
+    # Simulate download failing to produce .txt files
+    with patch("w2v.data.dataset.ensure_nltk_gutenberg_corpora"):
+        ret = main(["--corpus-dir", str(dir_without_txt), "--log-dir", str(log_dir), "--no-mlflow"])
+        assert ret == 1
+
+
+def test_cli_log_corpora_content_flag() -> None:
+    parser = create_parser()
+    args_default = parser.parse_args(["--corpus-dir", "./dummy"])
+    assert args_default.log_corpora_content is False
+
+    args_explicit = parser.parse_args(["--corpus-dir", "./dummy", "--log-corpora-content"])
+    assert args_explicit.log_corpora_content is True
+
+    args_disabled = parser.parse_args(["--corpus-dir", "./dummy", "--no-log-corpora-content"])
+    assert args_disabled.log_corpora_content is False
 
 
 def test_cli_main_no_mlflow(tmp_path: Path) -> None:

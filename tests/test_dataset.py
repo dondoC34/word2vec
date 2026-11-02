@@ -123,14 +123,22 @@ def test_invalid_inputs_raise_errors(tmp_path: Path) -> None:
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    with pytest.raises(ValueError, match="does not contain any text files"):
-        SkipGramDataset(corpus_dir=empty_dir)
+    with patch("w2v.data.dataset.ensure_nltk_gutenberg_corpora") as mock_dl:
 
-    dir_without_txt = tmp_path / "no_txt"
-    dir_without_txt.mkdir()
-    (dir_without_txt / "sample.bin").write_bytes(b"\x00\x01\x02")
-    with pytest.raises(ValueError, match="does not contain any text files"):
-        BoWDataset(corpus_dir=dir_without_txt)
+        def create_file(target):
+            (Path(target) / "sample.txt").write_text("word1 word2 word3 word1 word2 word3", encoding="utf-8")
+            return [Path(target) / "sample.txt"]
+
+        mock_dl.side_effect = create_file
+        ds = SkipGramDataset(corpus_dir=empty_dir)
+        assert mock_dl.called
+        assert len(ds.corpus_files) == 1
+
+    failed_dir = tmp_path / "failed"
+    failed_dir.mkdir()
+    with patch("w2v.data.dataset.ensure_nltk_gutenberg_corpora"):
+        with pytest.raises(ValueError, match="does not contain any text files"):
+            BoWDataset(corpus_dir=failed_dir)
 
 
 def test_downloader_target_corpora(tmp_path: Path) -> None:

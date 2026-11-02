@@ -525,12 +525,13 @@ class MLflowTracker:
         self,
         corpus_files: list[str | Path],
         documents: list[list[str]] | None = None,
+        log_content: bool = False,
         max_content_size_bytes: int = 50 * 1024 * 1024,
     ) -> None:
         """
-        Logs training corpora metadata (manifest) and text files as MLflow artifacts.
-        If the combined file size of all corpora exceeds `max_content_size_bytes` (50MB by default),
-        only the structured manifest JSON is logged to avoid saturating storage.
+        Logs training corpora metadata (manifest) and optionally text files as MLflow artifacts.
+        Metadata manifest JSON is always logged. Text files are uploaded only if `log_content` is True
+        and total size does not exceed `max_content_size_bytes` (50MB by default).
         """
         if not self.enabled or not self.run_id:
             return
@@ -565,7 +566,7 @@ class MLflowTracker:
                 return
 
             total_size_bytes = sum(p.stat().st_size for p in valid_paths)
-            log_content = total_size_bytes <= max_content_size_bytes
+            actual_log_content = log_content and (total_size_bytes <= max_content_size_bytes)
 
             doc_token_counts: list[int] = []
             if documents:
@@ -592,14 +593,14 @@ class MLflowTracker:
             manifest_data: dict[str, Any] = {
                 "total_files": len(valid_paths),
                 "total_size_bytes": total_size_bytes,
-                "content_logged": log_content,
+                "content_logged": actual_log_content,
                 "max_content_size_threshold_bytes": max_content_size_bytes,
                 "files": file_entries,
             }
 
             mlflow.log_dict(manifest_data, "corpora/corpora_manifest.json")
 
-            if log_content:
+            if actual_log_content:
                 for p in valid_paths:
                     mlflow.log_artifact(str(p), artifact_path="corpora")
                 logger.info(
@@ -607,12 +608,19 @@ class MLflowTracker:
                     len(valid_paths),
                     total_size_bytes / (1024 * 1024),
                 )
-            else:
+            elif log_content and total_size_bytes > max_content_size_bytes:
                 logger.info(
                     "Total corpora size (%.2f MB) exceeds threshold (%.2f MB). "
                     "Logged corpora manifest JSON only to MLflow artifacts ('corpora/corpora_manifest.json').",
                     total_size_bytes / (1024 * 1024),
                     max_content_size_bytes / (1024 * 1024),
+                )
+            else:
+                logger.info(
+                    "Logged corpora metadata manifest (total %d files, %.2f MB) to MLflow artifacts ('corpora/corpora_manifest.json'). "
+                    "Full text upload disabled (enable with --log-corpora-content).",
+                    len(valid_paths),
+                    total_size_bytes / (1024 * 1024),
                 )
 
             file_names = [p.name for p in valid_paths]
@@ -624,7 +632,7 @@ class MLflowTracker:
                 {
                     "corpora_count": str(len(valid_paths)),
                     "corpora_files": summary_names,
-                    "corpora_content_logged": str(log_content),
+                    "corpora_content_logged": str(actual_log_content),
                 }
             )
 

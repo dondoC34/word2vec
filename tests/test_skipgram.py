@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -139,11 +140,12 @@ def test_skipgram_error_handling(tmp_path: Path) -> None:
     empty_dir.mkdir()
 
     sg = SkipGram(embedding_dim=8)
-    with pytest.raises(FileNotFoundError):
-        sg.load_corpus_from_dir(tmp_path / "nonexistent")
+    with patch("w2v.base.ensure_nltk_gutenberg_corpora"):
+        with pytest.raises(ValueError):
+            sg.load_corpus_from_dir(tmp_path / "nonexistent")
 
-    with pytest.raises(ValueError):
-        sg.load_corpus_from_dir(empty_dir)
+        with pytest.raises(ValueError):
+            sg.load_corpus_from_dir(empty_dir)
 
     with pytest.raises(ValueError):
         sg.build_dataset()

@@ -116,6 +116,7 @@ Run `w2v --help` at any time to display the parameter table:
 | `--output-filename` | `None` | Custom output filename (defaults to timestamped `w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt`). |
 | `--format` | `word2vec` | Embedding export format (`word2vec`, `glove`, `numpy`, `pt`). |
 | `--device` | `None` | Compute device (`cuda` or `cpu`, auto-detected if None). |
+| `--log-corpora-content` / `--no-log-corpora-content` | `False` | Upload full text of training corpora to MLflow artifacts (default: False, manifest only). |
 | `--log-dir` | `./logs` | Directory where timestamped execution log files are stored. |
 | `--log-level` | `INFO` | Logging severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `-h, --help` | | Show help message with parameters table and exit. |
@@ -173,25 +174,21 @@ bow_history = bow.train(epochs=5, batch_size=512, lr=0.005)
 ## Corpora Management & Ingestion
 
 ### 1. Corpora Download & Empty Directory Handling
-By default, automatic download of corpus files is **disabled**.
 
-If the specified `--corpus-dir` is empty or does not contain any plain text files (`*.txt`) to train embeddings, `w2v` will:
-1. Log an error that no text files (`*.txt`) were found in the folder.
-2. Suggest that benchmark text corpora can be downloaded automatically using `--sync-corpora`.
-3. Provide the exact equivalent command line example to run.
+- **Empty or Non-Existent Directory**:
+  If the specified `--corpus-dir` does not exist or does not contain any plain text files (`*.txt`), `w2v` logs that no text files were found and **automatically triggers the download of sample benchmark literary corpora** (from NLTK Gutenberg) directly into that destination folder so training can proceed immediately without manual setup.
 
-#### Enabling Automatic Download
-To automatically download standard benchmark literary texts from NLTK Gutenberg:
-- **CLI**: Pass `--sync-corpora`
-  ```bash
-  w2v --corpus-dir ./corpuses --sync-corpora
-  ```
-- **Python**: Pass `sync_corpora_hook=True` (or `download=True` on Dataset classes)
-  ```python
-  sg = SkipGram(corpus_dir="./corpuses", sync_corpora_hook=True)
-  ```
+- **Pre-Populated Directory**:
+  If `--corpus-dir` already contains one or more `.txt` files, automatic download follows the `--sync-corpora` flag (disabled by default):
+  - With `--sync-corpora`, missing benchmark corpora are downloaded as a delta without touching existing files.
+  - Without `--sync-corpora`, only existing local files are ingested.
 
 Existing local files (such as `portrait_of_dorian_gray.txt`) are **never overwritten or removed**.
+
+### 2. MLflow Corpora Tracking
+When MLflow tracking is enabled:
+- **By Default**: `w2v` registers a structured metadata manifest (`corpora/corpora_manifest.json`) containing original paths, byte sizes, token counts, and **SHA-256 integrity hashes** for every corpus document without duplicating raw text files to disk.
+- **Full Text Upload**: Pass `--log-corpora-content` (or `log_corpora_content=True` in Python) if you wish to archive the actual `.txt` files into `mlartifacts/` (subject to a 50 MB safety threshold to protect disk space).
 
 ### 2. Using Custom Text Corpora
 To train on your own domain-specific documents:

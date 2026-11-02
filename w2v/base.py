@@ -109,6 +109,7 @@ class BaseWord2Vec(ABC):
         log_dir: str | Path = "./logs",
         enable_mlflow: bool = True,
         mlflow_config: str | Path | dict | None = None,
+        log_corpora_content: bool = False,
     ):
         if not logging.getLogger().handlers:
             setup_logging(log_dir=log_dir)
@@ -123,6 +124,7 @@ class BaseWord2Vec(ABC):
         self.corpus_dir = Path(corpus_dir) if corpus_dir else None
         self.enable_mlflow = enable_mlflow
         self.mlflow_config = mlflow_config
+        self.log_corpora_content = log_corpora_content
 
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -208,26 +210,30 @@ class BaseWord2Vec(ABC):
         the sliding context window strictly respects document boundaries.
         """
         corpus_path = Path(corpus_dir)
-        if not corpus_path.exists() or not corpus_path.is_dir():
-            self.logger.error("Corpus directory not found: '%s'", corpus_dir)
-            raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
+        existing_txt = sorted(list(corpus_path.glob("*.txt"))) if corpus_path.exists() and corpus_path.is_dir() else []
 
-        txt_files = sorted(list(corpus_path.glob("*.txt")))
-        if not txt_files:
-            self.logger.error(
-                "Corpus directory '%s' does not contain any text files (*.txt) to train embeddings.",
+        if not existing_txt:
+            self.logger.info(
+                "Corpus directory '%s' does not exist or does not contain any text files (*.txt). "
+                "Automatically triggering download of sample NLTK Gutenberg corpora into '%s'...",
+                corpus_dir,
                 corpus_dir,
             )
-            self.logger.info(
-                "Automatic download of corpora is disabled by default. "
-                "You can automatically download sample text files using the '--sync-corpora' parameter "
-                "(or pass 'sync_corpora_hook=True' / 'download=True' in Python)."
+            corpus_path.mkdir(parents=True, exist_ok=True)
+            ensure_nltk_gutenberg_corpora(corpus_path)
+            txt_files = sorted(list(corpus_path.glob("*.txt")))
+        else:
+            if self.sync_corpora_hook:
+                ensure_nltk_gutenberg_corpora(corpus_path)
+            txt_files = sorted(list(corpus_path.glob("*.txt")))
+
+        if not txt_files:
+            self.logger.error(
+                "Corpus directory '%s' does not contain any text files (*.txt) and automatic sample download could not provide any.",
+                corpus_dir,
             )
-            self.logger.info('Example command:\n  w2v --corpus-dir "%s" --sync-corpora', corpus_dir)
             raise ValueError(
-                f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings. "
-                f"Enable automatic download using '--sync-corpora' (or pass sync_corpora_hook=True). "
-                f'Example command: w2v --corpus-dir "{corpus_dir}" --sync-corpora'
+                f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings."
             )
 
         self.corpus_files = [str(f) for f in txt_files]
@@ -328,6 +334,7 @@ class BaseWord2Vec(ABC):
         enable_mlflow: bool | None = None,
         mlflow_config: str | Path | dict | None = None,
         run_name: str | None = None,
+        log_corpora_content: bool | None = None,
     ) -> list[float]:
         """
         Trains the model over the dataset across the specified number of epochs.
@@ -449,7 +456,8 @@ class BaseWord2Vec(ABC):
             tracker.log_figures(history, self, self.dataset)
             tracker.log_semantic_table(self)
             corpus_files_to_log: list[str | Path] = list(self.corpus_files or getattr(self.dataset, "corpus_files", []))
-            tracker.log_corpora(corpus_files_to_log, self.documents)
+            should_log_content = self.log_corpora_content if log_corpora_content is None else log_corpora_content
+            tracker.log_corpora(corpus_files_to_log, self.documents, log_content=should_log_content)
             tracker.log_model_checkpoint(self.model)
             run_id = tracker.run_id
             tracker.end_run()

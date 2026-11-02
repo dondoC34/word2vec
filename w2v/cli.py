@@ -199,6 +199,13 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional custom path to mlflow-config.yml.",
     )
+    parser.add_argument(
+        "--log-corpora-content",
+        dest="log_corpora_content",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Upload full text of training corpora files to MLflow artifacts (default: False, manifest only).",
+    )
 
     # Logging Options
     parser.add_argument(
@@ -348,10 +355,11 @@ def main(args: list[str] | None = None) -> int:
         parsed_args.tied_weights,
     )
     logger.info(
-        "Corpus directory: %s (auto-sync: %s, max_tokens: %s)",
+        "Corpus directory: %s (auto-sync: %s, max_tokens: %s, upload_content: %s)",
         parsed_args.corpus_dir,
         parsed_args.sync_corpora,
         parsed_args.max_tokens,
+        parsed_args.log_corpora_content,
     )
     logger.info("Output directory: %s (format: %s)", parsed_args.output_dir, parsed_args.format)
     logger.info("=" * 70)
@@ -377,6 +385,7 @@ def main(args: list[str] | None = None) -> int:
             log_dir=parsed_args.log_dir,
             enable_mlflow=parsed_args.mlflow,
             mlflow_config=parsed_args.mlflow_config,
+            log_corpora_content=parsed_args.log_corpora_content,
         )
 
         # Train model
@@ -392,6 +401,7 @@ def main(args: list[str] | None = None) -> int:
             lr=parsed_args.lr,
             enable_mlflow=parsed_args.mlflow,
             mlflow_config=parsed_args.mlflow_config,
+            log_corpora_content=parsed_args.log_corpora_content,
         )
         logger.info("Training complete. Final loss: %.4f", history[-1] if history else 0.0)
 

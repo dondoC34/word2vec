@@ -59,30 +59,32 @@ class BaseWord2VecDataset(Dataset, ABC):
         # Case 1: Ingest from corpus_dir directly (PyTorch dataset pattern)
         if corpus_dir is not None:
             corpus_path = Path(corpus_dir)
-            corpus_path.mkdir(parents=True, exist_ok=True)
-            if download:
-                ensure_nltk_gutenberg_corpora(corpus_path)
+            existing_txt = (
+                sorted(list(corpus_path.glob("*.txt"))) if corpus_path.exists() and corpus_path.is_dir() else []
+            )
 
-            if not corpus_path.exists() or not corpus_path.is_dir():
-                logger.error("Corpus directory not found: '%s'", corpus_dir)
-                raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
-
-            txt_files = sorted(list(corpus_path.glob("*.txt")))
-            if not txt_files:
-                logger.error(
-                    "Corpus directory '%s' does not contain any text files (*.txt) to train embeddings.",
+            if not existing_txt:
+                logger.info(
+                    "Corpus directory '%s' does not exist or does not contain any text files (*.txt). "
+                    "Automatically triggering download of sample NLTK Gutenberg corpora into '%s'...",
+                    corpus_dir,
                     corpus_dir,
                 )
-                logger.info(
-                    "Automatic download of corpora is disabled by default. "
-                    "You can automatically download sample text files using the '--sync-corpora' parameter "
-                    "(or pass 'download=True' / 'sync_corpora_hook=True' in Python)."
+                corpus_path.mkdir(parents=True, exist_ok=True)
+                ensure_nltk_gutenberg_corpora(corpus_path)
+                txt_files = sorted(list(corpus_path.glob("*.txt")))
+            else:
+                if download:
+                    ensure_nltk_gutenberg_corpora(corpus_path)
+                txt_files = sorted(list(corpus_path.glob("*.txt")))
+
+            if not txt_files:
+                logger.error(
+                    "Corpus directory '%s' does not contain any text files (*.txt) and automatic sample download could not provide any.",
+                    corpus_dir,
                 )
-                logger.info('Example command:\n  w2v --corpus-dir "%s" --sync-corpora', corpus_dir)
                 raise ValueError(
-                    f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings. "
-                    f"Enable automatic download using '--sync-corpora' (or pass download=True). "
-                    f'Example command: w2v --corpus-dir "{corpus_dir}" --sync-corpora'
+                    f"Corpus directory '{corpus_dir}' does not contain any text files (*.txt) to train embeddings."
                 )
 
             self.corpus_files = [str(f) for f in txt_files]

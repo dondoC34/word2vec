@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -110,8 +111,9 @@ def test_bow_error_handling(tmp_path: Path) -> None:
     empty_dir.mkdir()
 
     bow = BoW(embedding_dim=8, sync_corpora_hook=False)
-    with pytest.raises(ValueError):
-        bow.load_corpus_from_dir(empty_dir)
+    with patch("w2v.base.ensure_nltk_gutenberg_corpora"):
+        with pytest.raises(ValueError):
+            bow.load_corpus_from_dir(empty_dir)
 
     with pytest.raises(ValueError):
         bow.build_dataset()
