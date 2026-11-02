@@ -5,7 +5,6 @@ Built using Python's standard library `argparse`.
 
 import argparse
 import logging
-import subprocess
 import sys
 import webbrowser
 
@@ -20,6 +19,7 @@ from w2v.tracking import (
     list_mlflow_runs,
     load_mlflow_config,
     resolve_storage_paths,
+    start_mlflow_server,
 )
 
 logger = logging.getLogger("CLI")
@@ -238,44 +238,6 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     return parser
-
-
-def start_mlflow_server(
-    host: str = "127.0.0.1",
-    port: int = 5000,
-    backend_store_uri: str = "sqlite:///mlflow.db",
-    default_artifact_root: str = "./mlartifacts",
-) -> int:
-    """
-    Launches the MLflow tracking server and web UI as a subprocess.
-    """
-    cmd = [
-        sys.executable,
-        "-m",
-        "mlflow",
-        "server",
-        "--host",
-        str(host),
-        "--port",
-        str(port),
-        "--backend-store-uri",
-        str(backend_store_uri),
-        "--default-artifact-root",
-        str(default_artifact_root),
-    ]
-    logger.info("=" * 70)
-    logger.info("Starting MLflow Server...")
-    logger.info("Backend SQLite URI: %s", backend_store_uri)
-    logger.info("Default Artifact Root: %s", default_artifact_root)
-    logger.info("MLflow Web Dashboard: http://%s:%s", host, port)
-    logger.info("=" * 70)
-    print(f"\n[w2v] MLflow UI running at: http://{host}:{port}")
-    print("[w2v] Press Ctrl+C to terminate the server.\n")
-    try:
-        return subprocess.call(cmd)
-    except KeyboardInterrupt:
-        logger.info("MLflow server stopped by user.")
-        return 0
 
 
 def format_cli_table(headers: list[str], rows: list[list[str]]) -> str:

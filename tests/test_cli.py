@@ -304,7 +304,7 @@ def test_cli_main_custom_filename_and_no_overwrite(tmp_path: Path) -> None:
     assert len(default_files) == 2
 
 
-@patch("w2v.cli.subprocess.call", return_value=0)
+@patch("w2v.tracking.server.subprocess.call", return_value=0)
 def test_cli_mlflow_start_mocked(mock_call: MagicMock) -> None:
     ret = main(["mlflow", "start"])
     assert ret == 0
@@ -318,7 +318,7 @@ def test_cli_mlflow_start_mocked(mock_call: MagicMock) -> None:
     assert "5000" in cmd
 
 
-@patch("w2v.cli.subprocess.call", return_value=0)
+@patch("w2v.tracking.server.subprocess.call", return_value=0)
 def test_cli_mlflow_start_custom_config_mocked(mock_call: MagicMock, tmp_path: Path) -> None:
     custom_cfg = tmp_path / "test_cfg.yml"
     custom_cfg.write_text(
@@ -343,7 +343,7 @@ server:
     assert "sqlite:///custom_test.db" in cmd
 
 
-@patch("w2v.cli.subprocess.call", return_value=0)
+@patch("w2v.tracking.server.subprocess.call", return_value=0)
 def test_cli_mlflow_start_cli_overrides_mocked(mock_call: MagicMock) -> None:
     ret = main(["mlflow", "start", "--host", "0.0.0.0", "--port", "9999"])
     assert ret == 0
@@ -353,7 +353,7 @@ def test_cli_mlflow_start_cli_overrides_mocked(mock_call: MagicMock) -> None:
     assert "9999" in cmd
 
 
-@patch("w2v.cli.subprocess.call", return_value=0)
+@patch("w2v.tracking.server.subprocess.call", return_value=0)
 def test_cli_mlflow_run_alias_mocked(mock_call: MagicMock) -> None:
     ret = main(["mlflow", "run"])
     assert ret == 0
