@@ -1,21 +1,39 @@
-# Word2Vec (`w2v`): Modular PyTorch Embeddings Framework
+# Word2Vec (`w2v`) — Modular PyTorch Embeddings Framework
 
-[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.5%2B%20(CUDA%2FCPU)-ee4c2c.svg)](https://pytorch.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/dondoC34/word2vec/actions/workflows/ci.yml/badge.svg)](https://github.com/dondoC34/word2vec/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![PyTorch 2.5+](https://img.shields.io/badge/PyTorch-2.5%2B%20(CUDA%2FCPU)-ee4c2c.svg)](https://pytorch.org/)
+[![MLflow](https://img.shields.io/badge/MLflow-Tracking-0194E2.svg)](https://mlflow.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-A clean, modular, and production-ready PyTorch implementation of **Word2Vec (Skip-Gram with Negative Sampling - SGNS)**, architected from the ground up for extensibility toward additional architectures such as **Bag of Words (BoW / CBOW)**.
+A modular, production-ready PyTorch framework for training **Word2Vec** static word embeddings using **Skip-Gram with Negative Sampling (SGNS)** and **Continuous Bag-of-Words (CBOW / BoW)**.
+
+Designed with clean software engineering practices, `w2v` provides strict document-boundary isolation, automated corpus ingestion, multi-format vector export, and a full-featured **MLflow** experiment tracking and management CLI.
 
 ---
 
-## Key Highlights
+## Table of Contents
 
-- **Document Boundary Protection**: Sliding context windows strictly stop at the end of each document and restart at the beginning of the next. Tokens from adjacent books never contaminate each other with spurious training pairs.
-- **Automated Corpus Synchronization**: Built-in hook automatically detects missing classic benchmark literature from NLTK Gutenberg and downloads only the delta, while fully preserving pre-existing custom texts (such as *The Picture of Dorian Gray*).
-- **Tied vs. Untied Weights**: Supports both shared embedding matrices (`tied_weights=True`) and unshared matrices (`tied_weights=False`). In untied mode, exported embeddings automatically compute the arithmetic mean $\frac{\mathbf{W}_{\text{in}} + \mathbf{W}_{\text{out}}}{2}$, capturing complementary target and context semantics.
-- **Universal Embedding Formats**: Exports directly to the standard Google Word2Vec / Gensim text format, Stanford GloVe format, compressed NumPy (`.npz`), and PyTorch (`.pt`).
-- **Dedicated CLI & Python API**: Run training with a single shell command (`w2v`) or integrate directly into Python scripts.
-- **High-Performance PyTorch Backend**: Vectorized negative sampling powered by native C++/CUDA multinomial sampling, Adam optimizer, and multi-threaded DataLoader batching.
+- [Key Features](#key-features)
+- [Repository Structure](#repository-structure)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Command-Line Interface (`w2v`)](#command-line-interface-w2v)
+- [MLflow Management Suite (`w2v mlflow`)](#mlflow-management-suite-w2v-mlflow)
+- [Python API & Notebooks](#python-api--notebooks)
+- [Data Pipeline & Corpora Management](#data-pipeline--corpora-management)
+- [Embedding Formats & Downstream Usage](#embedding-formats--downstream-usage)
+
+---
+
+## Key Features
+
+- **Dual Neural Architectures**: Train either **Skip-Gram** (`SkipGram`) or **Continuous Bag-of-Words** (`BoW` / `CBOW`) models built on a unified `BaseWord2Vec` training engine with vectorized negative sampling.
+- **Document Boundary Isolation**: Sliding context windows strictly stop at the end of each document and reset at the start of the next, preventing spurious cross-document co-occurrence pairs.
+- **Smart Corpus Ingestion**: Automatically downloads classic benchmark literature (NLTK Project Gutenberg) if the target corpus directory is missing or contains no `.txt` files, while preserving custom local texts.
+- **Tied & Untied Weight Topologies**: Supports single shared embedding matrices (`--tied-weights`) as well as separate target/context matrices (`--no-tied-weights`), automatically exporting the arithmetic mean $\frac{\mathbf{W}_{\text{in}} + \mathbf{W}_{\text{out}}}{2}$ when untied.
+- **Integrated MLflow Experiment Tracking**: Automatically records hyperparameters, per-epoch loss, throughput (words/sec), CPU/RAM/GPU telemetry, Git commit metadata, SHA-256 corpus manifests, and diagnostic visualizations (loss curves, 2D PCA projections, cosine similarity heatmaps).
+- **Safe Timestamped Exports**: Prevents accidental file overwrites by defaulting to timestamped filenames (`w2v_{model}_embeddings_YYYYmmdd_hh_MM.<ext>`) across standard Word2Vec (`KeyedVectors`), GloVe, NumPy (`.npz`), and PyTorch (`.pt`) formats.
 
 ---
 
@@ -23,27 +41,35 @@ A clean, modular, and production-ready PyTorch implementation of **Word2Vec (Ski
 
 ```text
 word2vec/
-├── corpuses/                      # Text corpus files (*.txt)
-│   ├── portrait_of_dorian_gray.txt # Custom user book (always preserved)
-│   ├── austen-emma.txt            # NLTK Gutenberg synchronized books
-│   └── melville-moby_dick.txt     # ...
-├── embeddings/                    # Exported word embeddings (auto-created)
-│   └── word2vec_embeddings.txt    # Standard Word2Vec KeyedVectors format
-├── logs/                          # Timestamped execution logs
-│   └── word2vec_YYYYMMDD_HHMMSS.log
-├── w2v/                           # Core Python Package
-│   ├── __init__.py                # Public API exports
-│   ├── cli.py                     # Command-line interface (argparse)
-│   ├── skipgram.py                # Skip-Gram (SGNS) architecture & pipeline
+├── .github/workflows/
+│   └── ci.yml                     # GitHub Actions CI pipeline (lint, type-check, pytest)
+├── notebooks/
+│   ├── skipgram_training.ipynb    # Interactive Skip-Gram walkthrough & analysis
+│   └── cbow_training.ipynb        # Interactive CBOW walkthrough & analysis
+├── tests/                         # Unit and integration test suite (pytest)
+│   └── ...
+├── w2v/                           # Core Python package
+│   ├── __init__.py                # Public package exports
+│   ├── base.py                    # BaseWord2Vec shared training, querying & export engine
+│   ├── skipgram.py                # Skip-Gram (SGNS) model architecture & pipeline
 │   ├── bow.py                     # Continuous Bag-of-Words (CBOW) architecture & pipeline
+│   ├── cli.py                     # CLI entrypoints (`w2v` and `w2v mlflow`)
 │   ├── data/
-│   │   ├── __init__.py            # Dataset & downloader exports
+│   │   ├── __init__.py
 │   │   ├── dataset.py             # BaseWord2VecDataset, SkipGramDataset, BoWDataset
-│   │   └── downloader.py          # Delta Gutenberg ingestion hook
-│   └── preprocessing/
-│       ├── __init__.py            # Tokenizer exports
-│       └── tokenizer.py           # BaseTokenizer & BasicTokenizer
-├── pyproject.toml                 # Packaging, dependencies & CLI entrypoints
+│   │   └── downloader.py          # Non-destructive NLTK Gutenberg corpus downloader
+│   ├── preprocessing/
+│   │   ├── __init__.py
+│   │   └── tokenizer.py           # BaseTokenizer & regex-based BasicTokenizer
+│   └── tracking/                  # Modular MLflow tracking package
+│       ├── __init__.py            # Clean public tracking API
+│       ├── config.py              # YAML configuration loader & defaults
+│       ├── manager.py             # Storage inspection, run queries, export & cleanup
+│       ├── plotting.py            # Diagnostic Matplotlib figures (loss, PCA, heatmaps)
+│       ├── server.py              # Tracking server process lifecycle & port probes
+│       └── tracker.py             # MLflowTracker session manager & artifact logger
+├── mlflow-config.yml              # Default local MLflow server & tracking configuration
+├── pyproject.toml                 # Project metadata, dependencies & tool configurations
 └── README.md
 ```
 
@@ -52,87 +78,169 @@ word2vec/
 ## Installation
 
 ### Prerequisites
-- Python >= 3.12
-- PyTorch >= 2.5 with CUDA (recommended for GPU acceleration) or CPU
 
-### 1. Using `uv` (Recommended)
-[`uv`](https://github.com/astral-sh/uv) provides rapid environment resolution and dependency installation:
+- **Python**: `>= 3.12`
+- **PyTorch**: `>= 2.5` (CUDA supported and auto-detected; falls back cleanly to CPU)
+
+### Option 1: Using `uv` (Recommended)
+
+[`uv`](https://docs.astral.sh/uv/) provides fast, reproducible dependency resolution using `uv.lock`:
 
 ```bash
-git clone https://github.com/your-username/word2vec.git
+git clone https://github.com/dondoC34/word2vec.git
 cd word2vec
 
-# Install all dependencies and register the w2v CLI command in editable mode
+# Create virtual environment, install dependencies, and register the `w2v` CLI
 uv sync
-uv pip install -e .
 ```
 
-### 2. Using standard `pip`
+### Option 2: Using `pip`
+
 ```bash
+git clone https://github.com/dondoC34/word2vec.git
+cd word2vec
+
 python -m venv .venv
-# On Windows:
-.venv\Scripts\activate
-# On Linux/macOS:
+# Activate on Linux/macOS:
 source .venv/bin/activate
+# Activate on Windows (PowerShell):
+.venv\Scripts\Activate.ps1
 
 pip install -e .
 ```
 
 ---
 
-## Command-Line Interface (`w2v`)
+## Quick Start
 
-Once installed, the CLI tool `w2v` is available directly in your terminal.
+### 1. Train a Skip-Gram Model
 
-### Quick Command Example
+Run training with default hyperparameters. If `./corpuses` does not exist or contains no `.txt` files, sample benchmark corpora are downloaded automatically:
+
 ```bash
-w2v --model skipgram --embedding-dim 128 --output-dir ./embeddings
+uv run w2v --model skipgram --embedding-dim 128 --epochs 5
 ```
 
-Or using `uv run`:
+### 2. Train a Continuous Bag-of-Words (CBOW) Model
+
 ```bash
-uv run w2v --model skipgram --embedding-dim 128 --output-dir ./embeddings
+uv run w2v --model bow --embedding-dim 128 --window-size 3 --epochs 5 --batch-size 512
 ```
 
-### Full CLI Options Table
+### 3. Launch the MLflow Dashboard
 
-Run `w2v --help` at any time to display the parameter table:
+Inspect loss curves, 2D PCA embedding projections, similarity heatmaps, and system metrics in your browser:
 
-| Parameter | Default | Description |
-|---|---|---|
-| `--model` | `skipgram` | Model architecture to use (`skipgram`, `bow`, `cbow`). |
-| `--embedding-dim` | `128` | Dimensionality of dense embedding vectors. |
-| `--window-size` | `2` | Context half-window size (tokens left and right). |
-| `--n-negative` | `5` | Number of negative samples drawn per positive pair. |
-| `--min-count` | `3` | Minimum token frequency threshold (discards rare words). |
-| `--tied-weights` / `--no-tied-weights` | `True` | If False, saves arithmetic mean of $(\mathbf{W}_{\text{in}} + \mathbf{W}_{\text{out}}) / 2$. |
-| `--corpus-dir` | `./corpuses` | Directory containing text documents (`*.txt`). |
-| `--sync-corpora` / `--no-sync-corpora` | `False` | Automatic download and sync of missing NLTK Gutenberg corpora (disabled by default). |
-| `--max-tokens` | `None` | Optional maximum token budget across all documents. |
-| `--epochs` | `5` | Number of training epochs. |
-| `--batch-size` | `512` | Mini-batch size for DataLoader. |
-| `--lr` | `0.005` | Learning rate for Adam optimizer. |
-| `--output-dir` | `./embeddings` | Output directory (created automatically if missing). |
-| `--output-filename` | `None` | Custom output filename (defaults to timestamped `w2v_{model}_embeddings_YYYYmmdd_hh_MM.txt`). |
-| `--format` | `word2vec` | Embedding export format (`word2vec`, `glove`, `numpy`, `pt`). |
-| `--device` | `None` | Compute device (`cuda` or `cpu`, auto-detected if None). |
-| `--mlflow` / `--no-mlflow` | `True` | Enable/disable automatic MLflow experiment tracking. |
-| `--mlflow-config` | `None` | Optional custom path to YAML config (`mlflow-config.yml`). |
-| `--log-corpora-content` / `--no-log-corpora-content` | `False` | Upload full text of training corpora to MLflow artifacts (default: False, manifest only). |
-| `--log-dir` | `./logs` | Directory where timestamped execution log files are stored. |
-| `--log-level` | `INFO` | Logging severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `-h, --help` | | Show help message with parameters table and exit. |
+```bash
+# Start the local MLflow tracking server (http://127.0.0.1:5000)
+uv run w2v mlflow start
+
+# Or open the dashboard directly in your default web browser
+uv run w2v mlflow ui
+```
 
 ---
 
-## Python API Usage
+## Command-Line Interface (`w2v`)
 
-You can also import and customize the pipeline directly in your Python code:
+Once installed, the `w2v` command is available directly in your environment (or via `uv run w2v`).
+
+### Example Commands
+
+```bash
+# Train Skip-Gram with untied weights and export in PyTorch (.pt) format
+w2v --model skipgram --no-tied-weights --format pt --output-dir ./embeddings
+
+# Train CBOW with a token budget cap and custom output filename
+w2v --model bow --max-tokens 500000 --output-filename custom_cbow.txt
+
+# Train without MLflow tracking
+w2v --model skipgram --epochs 3 --no-mlflow
+```
+
+### CLI Parameters Reference
+
+Run `w2v --help` at any time to display the full options table:
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `--model` | `skipgram` | Model architecture to train (`skipgram`, `bow`, `cbow`). |
+| `--embedding-dim` | `128` | Dimensionality of dense word embedding vectors. |
+| `--window-size` | `2` | Context half-window size (number of tokens to the left and right). |
+| `--n-negative` | `5` | Number of negative samples drawn per positive context pair. |
+| `--min-count` | `3` | Minimum word frequency threshold (rarer tokens are discarded). |
+| `--tied-weights` / `--no-tied-weights` | `True` | Share input/output weights. If `False`, exports $\frac{\mathbf{W}_{\text{in}} + \mathbf{W}_{\text{out}}}{2}$. |
+| `--corpus-dir` | `./corpuses` | Directory containing plain-text training documents (`*.txt`). |
+| `--sync-corpora` / `--no-sync-corpora` | `False` | Download missing NLTK Gutenberg benchmark books when `.txt` files already exist. |
+| `--max-tokens` | `None` | Optional cap on the total number of tokens ingested across all documents. |
+| `--epochs` | `5` | Number of full passes over the training dataset. |
+| `--batch-size` | `512` | Mini-batch size for the PyTorch `DataLoader`. |
+| `--lr` | `0.005` | Learning rate for the Adam optimizer. |
+| `--output-dir` | `./embeddings` | Target directory for exported embeddings (created if missing). |
+| `--output-filename` | `None` | Custom output filename (defaults to `w2v_{model}_embeddings_YYYYmmdd_hh_MM.<ext>`). |
+| `--format` | `word2vec` | Export file format (`word2vec`, `glove`, `numpy`, `pt`). |
+| `--device` | `None` | Compute device (`cuda` or `cpu`; auto-detected when `None`). |
+| `--mlflow` / `--no-mlflow` | `True` | Enable or disable automatic MLflow experiment tracking. |
+| `--mlflow-config` | `None` | Path to a custom YAML configuration file (defaults to `mlflow-config.yml`). |
+| `--log-corpora-content` / `--no-log-corpora-content` | `False` | Upload raw `.txt` corpus files to MLflow artifacts (by default only the manifest is logged). |
+| `--log-dir` | `./logs` | Directory where timestamped execution logs are saved. |
+| `--log-level` | `INFO` | Console and file logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `-h, --help` | — | Display the formatted parameter table and exit. |
+
+---
+
+## MLflow Management Suite (`w2v mlflow`)
+
+`w2v` ships with a dedicated subcommand suite to manage the local SQLite-backed MLflow environment (`mlflow.db` and `./mlartifacts`) without requiring manual database or filesystem operations.
+
+> [!NOTE]
+> Every `w2v mlflow` subcommand accepts an optional `-c, --config <path>` flag to specify a custom YAML configuration file. By default, settings are read from `mlflow-config.yml`.
+
+### Subcommands Overview
+
+| Subcommand | Alias | Description |
+| :--- | :--- | :--- |
+| `w2v mlflow start` | `run` | Launch the local MLflow tracking server and web UI. |
+| `w2v mlflow status` | — | Check server health, database size, artifact disk usage, and run counts. |
+| `w2v mlflow list` | `runs` | Display an ASCII table of recent runs, hyperparameters, and loss metrics. |
+| `w2v mlflow best` | — | Identify the best-performing run (lowest loss) and optionally export its artifacts. |
+| `w2v mlflow clear` | `clean` | Safely purge tracking database records and/or artifact storage. |
+| `w2v mlflow ui` | `open` | Open the MLflow web dashboard in the system's default browser. |
+
+### Usage Examples
+
+```bash
+# 1. Start the tracking server on a custom port
+w2v mlflow start --host 127.0.0.1 --port 5000
+
+# 2. Check server status and storage footprint
+w2v mlflow status
+
+# 3. List top 5 Skip-Gram runs sorted by lowest training loss
+w2v mlflow list --model skipgram --sort-by loss --limit 5
+
+# 4. Inspect the best run and export its artifacts to a local directory
+w2v mlflow best --model skipgram --export-to ./best_checkpoint
+
+# 5. Clean up only heavy artifact files while keeping run metrics in SQLite
+w2v mlflow clear --artifacts-only --yes
+
+# 6. Full reset of both SQLite database and artifacts (with interactive confirmation)
+w2v mlflow clear
+```
+
+---
+
+## Python API & Notebooks
+
+### Programmatic Usage
+
+Integrate `SkipGram` or `BoW` directly into custom Python workflows:
 
 ```python
-from w2v import SkipGram, BoW, SkipGramDataset, BoWDataset, BasicTokenizer
+from w2v import BoW, SkipGram
 
-# 1. Initialize Skip-Gram with automatic corpus download & boundary protection
+# 1. Initialize and train a Skip-Gram model
 sg = SkipGram(
     corpus_dir="./corpuses",
     embedding_dim=128,
@@ -140,242 +248,90 @@ sg = SkipGram(
     n_negative=5,
     min_count=3,
     tied_weights=True,
-    sync_corpora_hook=True,
 )
-
-# 2. Train the model across epochs
 history = sg.train(epochs=5, batch_size=512, lr=0.005)
 
-# 3. Export embeddings to disk
-saved_file = sg.save_embeddings(output_dir="./embeddings", format="word2vec")
-print(f"Embeddings saved to: {saved_file}")
+# 2. Export trained embeddings
+saved_path = sg.save_embeddings(output_dir="./embeddings", format="word2vec")
+print(f"Saved embeddings to: {saved_path}")
 
-# 4. Perform cosine similarity semantic queries
-neighbors = sg.most_similar("dorian", top_k=5)
-for word, score in neighbors:
-    print(f"  {word}: {score:+.4f}")
+# 3. Query semantic nearest neighbors via cosine similarity
+for word, similarity in sg.most_similar("dorian", top_k=5):
+    print(f"{word:<15} {similarity:+.4f}")
 
-# 5. Extract a single word vector as a NumPy array
-vector = sg.get_embedding("alice")
-print("Vector shape:", vector.shape)
+# 4. Retrieve a single word vector as a NumPy array
+vector = sg.get_embedding("london")
+print(f"Vector shape: {vector.shape}")
 
-# Alternatively, initialize and train Continuous Bag-of-Words (CBOW / BoW)
+# 5. Train a Continuous Bag-of-Words (CBOW) model
 bow = BoW(
     corpus_dir="./corpuses",
     embedding_dim=128,
     window_size=2,
     n_negative=5,
     min_count=3,
-    tied_weights=True,
 )
-bow_history = bow.train(epochs=5, batch_size=512, lr=0.005)
+bow.train(epochs=5, batch_size=512, lr=0.005)
 ```
+
+### Interactive Jupyter Notebooks
+
+Explore end-to-end training, loss convergence, and embedding space visualizations in the included notebooks:
+
+- `notebooks/skipgram_training.ipynb` — Skip-Gram (SGNS) pipeline walkthrough.
+- `notebooks/cbow_training.ipynb` — Continuous Bag-of-Words (CBOW) pipeline walkthrough.
 
 ---
 
-## Corpora Management & Ingestion
+## Data Pipeline & Corpora Management
 
-### 1. Corpora Download & Empty Directory Handling
+### Automatic Corpus Fallback & Synchronization
 
-- **Empty or Non-Existent Directory**:
-  If the specified `--corpus-dir` does not exist or does not contain any plain text files (`*.txt`), `w2v` logs that no text files were found and **automatically triggers the download of sample benchmark literary corpora** (from NLTK Gutenberg) directly into that destination folder so training can proceed immediately without manual setup.
+1. **Empty or Missing Directory**:
+   If `--corpus-dir` does not exist or contains zero `.txt` files, `w2v` logs an informational notice and **automatically downloads sample benchmark corpora** from NLTK Project Gutenberg into that directory so training works out of the box.
+2. **Pre-Populated Directory**:
+   If `--corpus-dir` already contains one or more `.txt` files, `w2v` uses only your local files by default. Pass `--sync-corpora` if you want to fetch any missing Gutenberg benchmark books alongside your custom files. Existing files are never overwritten or deleted.
 
-- **Pre-Populated Directory**:
-  If `--corpus-dir` already contains one or more `.txt` files, automatic download follows the `--sync-corpora` flag (disabled by default):
-  - With `--sync-corpora`, missing benchmark corpora are downloaded as a delta without touching existing files.
-  - Without `--sync-corpora`, only existing local files are ingested.
+### Document Boundary Protection
 
-Existing local files (such as `portrait_of_dorian_gray.txt`) are **never overwritten or removed**.
-
-### 2. MLflow Corpora Tracking
-When MLflow tracking is enabled:
-- **By Default**: `w2v` registers a structured metadata manifest (`corpora/corpora_manifest.json`) containing original paths, byte sizes, token counts, and **SHA-256 integrity hashes** for every corpus document without duplicating raw text files to disk.
-- **Full Text Upload**: Pass `--log-corpora-content` (or `log_corpora_content=True` in Python) if you wish to archive the actual `.txt` files into `mlartifacts/` (subject to a 50 MB safety threshold to protect disk space).
-
-### 3. Using Custom Text Corpora
-To train on your own domain-specific documents:
-1. Place any plain UTF-8 text files (`*.txt`) inside your folder (e.g. `./my_data/book1.txt`, `./my_data/book2.txt`).
-2. Point `corpus_dir` to that folder (download is disabled by default):
-   ```bash
-   w2v --corpus-dir ./my_data --output-dir ./my_embeddings
-   ```
-
-### 4. Document Boundary Protection
-In conventional naive implementations, all corpus texts are concatenated into one long token list. This causes the last words of Book A and the first words of Book B to be treated as adjacent context neighbors, creating spurious pairings (e.g. pairing characters from different novels).
-
-`w2v` tokenizes and stores documents as isolated sequences (`List[List[str]]`). During Skip-Gram pair generation, the sliding context window is strictly constrained to the boundaries of each individual document.
+Rather than concatenating all files into a single flat token stream—which contaminates context windows at the boundaries between unrelated documents—`w2v` processes corpora as isolated document sequences (`list[list[str]]`). Context windows strictly terminate at the end of each file.
 
 ---
 
-## Output & Results Structure
+## Embedding Formats & Downstream Usage
 
-### 1. Where are the Results Saved?
-By default, embeddings are exported to:
-```text
-./embeddings/word2vec_embeddings.txt
-```
-If the directory does not exist, it is created automatically.
+By default, embeddings are saved to `./embeddings/w2v_{model}_embeddings_YYYYmmdd_hh_MM.<ext>`. You can override the filename with `--output-filename`.
 
-### 2. File Format Details
-The primary export format is the **standard Word2Vec KeyedVectors text format** (compatible with Google C Word2Vec, Gensim, spaCy, and fastText):
+| Format Flag | Extension | Structure |
+| :--- | :--- | :--- |
+| `--format word2vec` | `.txt` | `<vocab_size> <dim>` header followed by `<word> <v_1> ... <v_D>` lines. |
+| `--format glove` | `.txt` | Headerless plain text with `<word> <v_1> ... <v_D>` per line. |
+| `--format numpy` | `.npz` | Compressed NumPy archive with `words` and `vectors` arrays. |
+| `--format pt` | `.pt` | PyTorch dictionary containing `{"words": list[str], "vectors": torch.Tensor}`. |
 
-- **Header (Line 1)**: `<vocab_size> <embedding_dimension>`
-- **Body (Lines 2 to N+1)**: `<word> <v_1> <v_2> ... <v_D>`
-
-#### Example File Content:
-```text
-14967 128
-emma 0.335441 0.153285 -0.228424 -0.198774 0.053688 ...
-by 0.062310 -0.032598 0.009740 0.025141 -0.006778 ...
-jane 0.153899 0.098117 -0.230463 0.048816 0.006228 ...
-dorian 0.118905 -0.057310 0.081238 -0.003662 0.157168 ...
-```
-
-### 3. Loading the Saved Embeddings in Gensim
-Because the format adheres strictly to the official standard, you can load it in Gensim with one line:
+### Loading in Gensim
 
 ```python
 from gensim.models import KeyedVectors
 
-# Load trained embeddings
-wv = KeyedVectors.load_word2vec_format("embeddings/word2vec_embeddings.txt", binary=False)
-
-# Query semantic similarities
-print(wv.most_similar("dorian", topn=5))
-print("Cosine similarity:", wv.similarity("captain", "ahab"))
+wv = KeyedVectors.load_word2vec_format(
+    "embeddings/w2v_skipgram_embeddings_20261102_11_00.txt",
+    binary=False,
+)
+print(wv.most_similar("whale", topn=5))
 ```
 
-### 4. Alternative Output Formats
-Using the `--format` option:
-- `--format word2vec` (default): Text file with `<vocab_size> <dim>` header.
-- `--format glove`: Pure text format without header line (`<word> <v_1> ...`).
-- `--format numpy` (or `npz`): Compressed NumPy archive containing `words` and `vectors` arrays (`np.load("embeddings.npz")`).
-- `--format pt`: PyTorch dictionary containing `{"words": list, "vectors": torch.Tensor}`.
+### Loading in NumPy / PyTorch
 
----
+```python
+import numpy as np
+import torch
 
-## MLflow Tracking & CLI Management
+# NumPy (.npz)
+data = np.load("embeddings/w2v_skipgram_embeddings_20261102_11_00.npz")
+words, vectors = data["words"], data["vectors"]
 
-`w2v` integrates local experiment tracking powered by MLflow and SQLite. The CLI provides a dedicated `w2v mlflow` toolset to inspect runs, query metrics, check storage, and manage the tracking lifecycle.
-
-> [!NOTE]
-> All `w2v mlflow` commands accept an optional `-c, --config <path>` parameter. If omitted, `w2v` automatically loads `mlflow-config.yml` from the current directory or repository root, falling back to standard defaults (`sqlite:///mlflow.db` and `./mlartifacts`).
-
-### 1. Starting the Web Server (`start` / `run`)
-Launch the MLflow tracking server and dashboard:
-```bash
-w2v mlflow start
-# Or using the alias:
-w2v mlflow run
+# PyTorch (.pt)
+checkpoint = torch.load("embeddings/w2v_skipgram_embeddings_20261102_11_00.pt", weights_only=True)
+words, tensor_vectors = checkpoint["words"], checkpoint["vectors"]
 ```
-Options:
-- `--host`: Host IP address (default: `127.0.0.1`).
-- `--port`: Port number (default: `5000`).
-- `-c, --config`: Optional path to custom YAML config.
-
-### 2. Checking System & Storage Status (`status`)
-Inspect server status (online/offline), SQLite database file size, artifact disk usage, total runs, and best loss per experiment:
-```bash
-w2v mlflow status
-```
-
-### 3. Listing Experiment Runs (`list` / `runs`)
-Display a structured terminal table of recent training runs with their hyperparameters and final loss:
-```bash
-w2v mlflow list --limit 10
-# Or using the alias:
-w2v mlflow runs --sort-by loss --model skipgram
-```
-Options:
-- `--limit`: Number of runs to display (default: `10`).
-- `--sort-by`: Sort criteria: `date` (most recent first) or `loss` (lowest loss first).
-- `--experiment`: Filter by experiment name (e.g. `Word2Vec-SkipGram`).
-- `--model`: Filter by architecture (`skipgram` or `bow`).
-
-### 4. Inspecting the Best Performing Model (`best`)
-Find the run with the lowest recorded training loss and display its full configuration:
-```bash
-w2v mlflow best --model skipgram
-```
-To directly export the winning run's embeddings and checkpoint to a folder without hunting inside `mlartifacts/`:
-```bash
-w2v mlflow best --model skipgram --export-to ./best_model
-```
-
-### 5. Cleaning Storage & Artifacts (`clear` / `clean`)
-Permanently wipe the SQLite database records and/or artifact directories:
-```bash
-# Prompts for confirmation before deleting:
-w2v mlflow clear
-
-# Delete immediately without interactive prompt:
-w2v mlflow clear --yes
-
-# Delete only heavy visual and model artifacts, leaving run metrics in the DB intact:
-w2v mlflow clean --artifacts-only --yes
-```
-
-### 6. Opening the Web Dashboard (`ui` / `open`)
-Open the MLflow dashboard directly in your default browser:
-```bash
-w2v mlflow ui
-# Or using the alias:
-w2v mlflow open
-```
-Open **http://127.0.0.1:5000** to inspect:
-- **Metrics**: Loss convergence curves (`epoch_loss`), epoch execution times, and learning rate.
-- **Parameters & Tags**: Model architecture, embedding dimension, window size, negative samples, token caps, Git commit hash, and corpora counts.
-- **Visual Artifacts**: Loss curves, 2D PCA vector projections, cosine similarity heatmaps, semantic evaluation tables, and corpora metadata manifests.
-- **System Metrics**: Real-time CPU, RAM, and GPU utilization.
-
----
-
-## Architecture & Extensibility (Roadmap)
-
-`w2v` separates tokenization, dataset generation, neural architecture, and training into modular components:
-
-```text
-[Raw Documents / NLTK Hook]
-           │
-           ▼
-[BaseTokenizer / BasicTokenizer]
-           │
-           ▼
-[BaseWord2VecDataset] ◄── Abstract interface for Word2Vec family
-      ├── SkipGramDataset (Skip-Gram context pairs)
-      └── BoWDataset / CBOWDataset (Continuous Bag-of-Words)
-           │
-           ▼
-[SkipGramModel (SGNS) / BoWModel (CBOW)]
-           │
-           ▼
-[SkipGram / BoW Engines]
-           │
-           ▼
-[Vector Export: save_embeddings()]
-```
-
-### Continuous Bag-of-Words (CBOW / BoW) Support
-The abstract base class `BaseWord2VecDataset` in [`w2v.data.dataset`](file:///C:/Users/utente/repos/word2vec/w2v/data/dataset.py) defines the contract for vocabulary mapping and tensor generation. The CBOW model slides across context windows to predict the central target word from the mean of context tokens using `nn.EmbeddingBag`, sharing the same tokenizer, corpus synchronization, and export utilities.
-
----
-
-## Logging & Diagnostics
-
-`w2v` features centralized structured logging. Each execution automatically logs timestamp, severity level, and component source:
-
-```text
-2026-10-20 21:34:42 [INFO] [CLI]: w2v CLI: Starting Word2Vec training
-2026-10-20 21:34:42 [INFO] [DataDownloader]: Scanning directory 'corpuses' for NLTK Gutenberg corpora...
-2026-10-20 21:34:43 [INFO] [Dataset]: Skip-Gram pair generation complete: 3,629,054 pairs (0 cross-doc contamination).
-2026-10-20 21:34:46 [INFO] [Word2Vec]: Epoch [1/5] - Average Loss: 7.1884 across 7088 batches.
-2026-10-20 21:34:46 [INFO] [Word2Vec]: Word embeddings successfully saved to 'embeddings/word2vec_embeddings.txt'.
-```
-
-Logs are displayed in real time on the console and simultaneously persisted to timestamped files in `./logs/`.
-
----
-
-## License
-
-This project is licensed under the MIT License.
